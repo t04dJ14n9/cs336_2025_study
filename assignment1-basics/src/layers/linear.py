@@ -20,7 +20,7 @@ class Linear(nn.Module):
         >>> output = linear(x)       # shape: (32, 5)
     """
     
-    def __init__(self, in_features: int, out_features: int, device=None, dtype=None, weights=None, bias=None):
+    def __init__(self, in_features: int, out_features: int, device=None, dtype=None, weights=None):
         super().__init__()
         if weights is not None:
             self.weights = nn.Parameter(weights)
@@ -28,12 +28,8 @@ class Linear(nn.Module):
             # Create weight parameter and initialize it
             self.weights = nn.Parameter(torch.rand(out_features, in_features, device=device, dtype=dtype))
             # Initialize weights using truncated normal distribution
-            nn.init.trunc_normal_(self.weights, mean=0.0, std=0.02, a=-2.0, b=2.0)
+            nn.init.trunc_normal_(self.weights)
 
-        if bias is not None:
-            self.bias = nn.Parameter(bias)
-        else:
-            self.bias = nn.Parameter(torch.zeros(out_features, device=device, dtype=dtype))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -45,4 +41,4 @@ class Linear(nn.Module):
         Returns:
             torch.Tensor: Output tensor of shape (..., out_features)
         """
-        return x @ self.weights.T + self.bias
+        return x @ self.weights.T 

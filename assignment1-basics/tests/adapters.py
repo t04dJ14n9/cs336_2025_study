@@ -9,7 +9,7 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-from src.layers import Linear, Embedding, RMSNorm
+from src.layers import Linear, Embedding, RMSNorm, FeedForward, RoPE
 
 
 def run_linear(
@@ -88,7 +88,11 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    feedforward = FeedForward(d_model, d_ff)
+    feedforward._load_weight(w1_weight, w2_weight, w3_weight)
+    out_features = feedforward(in_features)
+    return out_features
+
 
 
 def run_scaled_dot_product_attention(
@@ -205,7 +209,8 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    rope = RoPE(theta, d_k, max_seq_len)
+    return rope.forward(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
