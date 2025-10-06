@@ -9,6 +9,7 @@ from .embedding import Embedding
 from .layer_norm import RMSNorm
 from .feed_forward import FeedForward
 from .positional_encoding import RoPE
+from .softmax import softmax
 
 # Export all public classes and functions
-__all__ = ['Linear', 'Embedding', 'RMSNorm', 'FeedForward']
+__all__ = ['Linear', 'Embedding', 'RMSNorm', 'FeedForward', 'RoPE', 'softmax']
