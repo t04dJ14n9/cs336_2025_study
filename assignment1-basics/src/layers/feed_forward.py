@@ -63,32 +63,6 @@ class FeedForward(nn.Module):
         
         return output
 
-    def _swiglu_traditional(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Traditional implementation for comparison (without einops).
-        
-        Args:
-            x: Input tensor [..., d_model]
-            
-        Returns:
-            Output tensor [..., d_model]
-        """
-        # Reshape for matrix multiplication: [..., d_model] -> [..., 1, d_model]
-        x_reshaped = x.unsqueeze(-2)
-        
-        # Matrix multiplications
-        gate1 = torch.matmul(x_reshaped, self.w1.T).squeeze(-2)  # [..., d_ff]
-        gate3 = torch.matmul(x_reshaped, self.w3.T).squeeze(-2)  # [..., d_ff]
-        
-        # SwiGLU activation
-        activated = self._silu(gate1) * gate3  # [..., d_ff]
-        
-        # Output projection
-        activated_reshaped = activated.unsqueeze(-2)  # [..., 1, d_ff]
-        output = torch.matmul(activated_reshaped, self.w2.T).squeeze(-2)  # [..., d_model]
-        
-        return output
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through the feed-forward network using einops.

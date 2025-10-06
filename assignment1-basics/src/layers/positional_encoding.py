@@ -34,22 +34,18 @@ class RoPE(nn.Module):
                     [math.cos(theta_i_k), -math.sin(theta_i_k)],
                     [math.sin(theta_i_k), math.cos(theta_i_k)],
                 ]))
-            stacked_mat = torch.stack(mat_list)  # Shape: [d_k//2, 2, 2]
             # Create block diagonal matrix
             rot_mats[i] = torch.block_diag(*mat_list)
         return rot_mats
 
-
-        
-
-    """
-    Process an input tensor of shape (..., seq_len, d_k) and return a tensor of the same shape.
-    Note that you should tolerate x with an arbitrary number of batch dimensions. You should assume
-    that the token positions are a tensor of shape (..., seq_len) specifying the token positions of x 
-    along the sequence dimension.  You should use the token positions to slice your (possibly precomputed) 
-    cos and sin tensors along the sequence dimension.
-    """
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        """
+        Process an input tensor of shape (..., seq_len, d_k) and return a tensor of the same shape.
+        Note that you should tolerate x with an arbitrary number of batch dimensions. You should assume
+        that the token positions are a tensor of shape (..., seq_len) specifying the token positions of x 
+        along the sequence dimension.  You should use the token positions to slice your (possibly precomputed) 
+        cos and sin tensors along the sequence dimension.
+        """
         # Get rotation matrices for the specified token positions
         rot_mat = self.get_buffer('rot_mats')[token_positions]  # Shape: (..., seq_len, d_k, d_k)
         
