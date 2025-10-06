@@ -9,6 +9,8 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
+from src.layers import Linear, Embedding, RMSNorm
+
 
 def run_linear(
     d_in: int,
@@ -28,8 +30,10 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    linear = Linear(d_in, d_out, device=device, dtype=torch.float32, weights=weights.to(device))
 
-    raise NotImplementedError
+    return linear.forward(in_features.to(device))
 
 
 def run_embedding(
@@ -51,7 +55,8 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
 
-    raise NotImplementedError
+    embedding = Embedding(vocab_size, d_model, weights=weights)
+    return embedding.forward(token_ids)
 
 
 def run_swiglu(
@@ -378,7 +383,10 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    rmsNorm = RMSNorm(d_model=d_model, eps=eps, weights=weights) 
+    out_features = rmsNorm.forward(in_features)
+    return out_features
+    
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
