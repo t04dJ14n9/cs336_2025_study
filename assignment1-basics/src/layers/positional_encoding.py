@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from einops import rearrange, einsum
+from einops import einsum
 import math
 
 class RoPE(nn.Module):
@@ -35,7 +35,7 @@ class RoPE(nn.Module):
                     [math.sin(theta_i_k), math.cos(theta_i_k)],
                 ]))
             # Create block diagonal matrix
-            rot_mats[i] = torch.block_diag(*mat_list)
+            rot_mats[i] = torch.block_diag(*mat_list) # the usage of '*' unpacks the list, similar to ... in Golang
         return rot_mats
 
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
@@ -47,12 +47,8 @@ class RoPE(nn.Module):
         cos and sin tensors along the sequence dimension.
         """
         # Get rotation matrices for the specified token positions
-        rot_mat = self.get_buffer('rot_mats')[token_positions]  # Shape: (..., seq_len, d_k, d_k)
+        rot_mat = self.get_buffer('rot_mats')[token_positions]  
         
-        # Apply rotation: rot_mat @ x where x has shape (..., seq_len, d_k)
-        # We need to add a dimension to x for matrix multiplication
-        x_expanded = x.unsqueeze(-1)  # Shape: (..., seq_len, d_k, 1)
-        rotated = torch.matmul(rot_mat, x_expanded)  # Shape: (..., seq_len, d_k, 1)
-        return rotated.squeeze(-1)  # Shape: (..., seq_len, d_k)
+        return einsum(rot_mat, x, "... seq_len i j, ... seq_len j -> ... seq_len i")
 
         

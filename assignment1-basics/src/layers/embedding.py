@@ -7,6 +7,6 @@ class Embedding(nn.Module):
         if weights is not None:
             self.weights = nn.Parameter(weights)
         else:
-            self.weights = nn.Parameter(torch.nn.init.trunc_normal_(torch.rand()))
+            self.weights = nn.Parameter(torch.nn.init.trunc_normal_(torch.rand(num_embeddings, embedding_dim, device=device, dtype=dtype)))
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         return self.weights[token_ids]
