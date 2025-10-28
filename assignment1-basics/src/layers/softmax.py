@@ -1,5 +1,4 @@
 import torch
-from torch import nn
 
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     # Subtract max for numerical stability

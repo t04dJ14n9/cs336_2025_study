@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from einops import einsum
 import math
+from jaxtyping import Float, Int
 
 class RoPE(nn.Module):
     """Rotary Positional Embedding (RoPE) module.
@@ -38,7 +39,11 @@ class RoPE(nn.Module):
             rot_mats[i] = torch.block_diag(*mat_list) # the usage of '*' unpacks the list, similar to ... in Golang
         return rot_mats
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, 
+        x: Float[torch.Tensor, "... seq_len d_k"],
+        token_positions: Int[torch.Tensor, "... seq_len"]
+    ) -> Float[torch.Tensor, "... seq_len d_k"]: 
         """
         Process an input tensor of shape (..., seq_len, d_k) and return a tensor of the same shape.
         Note that you should tolerate x with an arbitrary number of batch dimensions. You should assume
