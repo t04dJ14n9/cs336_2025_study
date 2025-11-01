@@ -32,38 +32,33 @@ class MultiHeadAttention(nn.Module):
         mask: Bool[torch.Tensor, "... seq_len seq_len"] | None=None,
         ) -> Float[torch.Tensor, "batch_size ... seq_len d_model"]:
 
-        # Project Q, K, V using the weight matrices
+        # Batched approach: project all heads at once
         # w_q, w_k, w_v have shape (num_heads * d_k, d_model)
-        # We want to compute: input @ w.T to get (... seq_len, num_heads * d_k)
+        # After projection, we get shape (..., seq_len, num_heads * d_k)
         Q_proj = einsum(Q, self.w_q, "... seq_len d_model, hd_k d_model -> ... seq_len hd_k")
         K_proj = einsum(K, self.w_k, "... seq_len d_model, hd_k d_model -> ... seq_len hd_k")
         V_proj = einsum(V, self.w_v, "... seq_len d_model, hd_v d_model -> ... seq_len hd_v")
-
-        # Reshape to separate heads: (... seq_len, num_heads, d_k)
-        Q_proj = rearrange(Q_proj, "... seq_len (h d_k) -> ... seq_len h d_k", h=self.h)
-        K_proj = rearrange(K_proj, "... seq_len (h d_k) -> ... seq_len h d_k", h=self.h)
-        V_proj = rearrange(V_proj, "... seq_len (h d_v) -> ... seq_len h d_v", h=self.h)
-
-        # Compute scaled dot product attention for each head
-        # Rearrange to put head dimension first for easier processing: (... h seq_len d_k)
-        Q_proj = rearrange(Q_proj, "... seq_len h d_k -> ... h seq_len d_k")
-        K_proj = rearrange(K_proj, "... seq_len h d_k -> ... h seq_len d_k")
-        V_proj = rearrange(V_proj, "... seq_len h d_v -> ... h seq_len d_v")
         
-        # Apply scaled dot product attention
-        # Use the mask parameter from forward, or fall back to self.mask
-        # Output shape: (... h seq_len d_v)
-        attn_mask = mask if mask is not None else self.mask
-        attn_output = scaled_dot_product_attention(Q_proj, K_proj, V_proj, attn_mask)
+        # Reshape to separate heads: (..., seq_len, num_heads * d_k) -> (..., seq_len, num_heads, d_k)
+        # Rearrange to put heads in batch dimension: (..., seq_len, h, d_k) -> (..., h, seq_len, d_k)
+        Q_proj = rearrange(Q_proj, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.h)
+        K_proj = rearrange(K_proj, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.h)
+        V_proj = rearrange(V_proj, "... seq_len (h d_v) -> ... h seq_len d_v", h=self.h)
         
-        # Rearrange back: (... seq_len h d_v)
-        attn_output = rearrange(attn_output, "... h seq_len d_v -> ... seq_len h d_v")
+        # Compute attention for all heads at once
+        # scaled_dot_product_attention expects (..., seq_len, d)
+        attention = scaled_dot_product_attention(Q_proj, K_proj, V_proj, mask)
+        # attention shape: (..., h, seq_len, d_v)
+        
+        # Rearrange back: (..., h, seq_len, d_v) -> (..., seq_len, h, d_v)
+        # Concatenate heads: (..., seq_len, h, d_v) -> (..., seq_len, h * d_v)
+        attention = rearrange(attention, "... h seq_len d_v -> ... seq_len (h d_v)")
+        
+        # Apply output projection: w_o has shape (d_model, h * d_v)
+        output = einsum(attention, self.w_o, "... seq_len hd_v, d_model hd_v -> ... seq_len d_model")
+        
+        return output
 
-        # Concatenate the output for each head: (... seq_len, h*d_v)
-        output = rearrange(attn_output, "... seq_len h d_v -> ... seq_len (h d_v)")
-
-        # Project the output and return: (... seq_len, d_model)
-        return einsum(output, self.w_o, "... seq_len hd_v, d_model hd_v -> ... seq_len d_model")
 
 
 

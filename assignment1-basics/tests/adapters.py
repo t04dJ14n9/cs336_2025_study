@@ -150,12 +150,16 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     multi_head_attention = MultiHeadAttention(d_model, num_heads)
-    multi_head_attention.w_q.data = q_proj_weight
-    multi_head_attention.w_k.data = k_proj_weight
-    multi_head_attention.w_v.data = v_proj_weight
-    multi_head_attention.w_o.data = o_proj_weight
+    multi_head_attention.w_q= nn.Parameter(q_proj_weight)
+    multi_head_attention.w_k= nn.Parameter(k_proj_weight)
+    multi_head_attention.w_v= nn.Parameter(v_proj_weight)
+    multi_head_attention.w_o= nn.Parameter(o_proj_weight)
 
-    return multi_head_attention.forward(in_features, in_features, in_features)
+    # Create causal mask for decoder-style attention
+    seq_len = in_features.shape[-2]
+    causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=in_features.device)).bool()
+
+    return multi_head_attention.forward(in_features, in_features, in_features, mask=causal_mask)
 
 
 
