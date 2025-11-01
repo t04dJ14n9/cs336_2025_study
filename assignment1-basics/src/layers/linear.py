@@ -24,9 +24,10 @@ class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int, device=None, dtype=None, bias: bool=False):
         super().__init__()
         # Create weight parameter and initialize it
-        self.weights = nn.Parameter(torch.rand(out_features, in_features, device=device, dtype=dtype))
-        # Initialize weights using truncated normal distribution
-        nn.init.trunc_normal_(self.weights)
+        self.weights = nn.Parameter(torch.zeros(out_features, in_features, device=device, dtype=dtype))
+        # Initialize weights using truncated normal distribution, truncated at [-3*std, 3std]
+        std =  (2/(in_features + out_features)) ** 0.5
+        nn.init.trunc_normal_(self.weights, mean=0, std=std, a=(-3 * std), b = (3 * std))
         self.need_bias = False
 
         # Create bias parameter and initialize it
