@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from einops import einsum
 
 class Linear(nn.Module):
     """
@@ -20,16 +21,19 @@ class Linear(nn.Module):
         >>> output = linear(x)       # shape: (32, 5)
     """
     
-    def __init__(self, in_features: int, out_features: int, device=None, dtype=None, weights=None):
+    def __init__(self, in_features: int, out_features: int, device=None, dtype=None, bias: bool=False):
         super().__init__()
-        if weights is not None:
-            self.weights = nn.Parameter(weights)
-        else: 
-            # Create weight parameter and initialize it
-            self.weights = nn.Parameter(torch.rand(out_features, in_features, device=device, dtype=dtype))
-            # Initialize weights using truncated normal distribution
-            nn.init.trunc_normal_(self.weights)
+        # Create weight parameter and initialize it
+        self.weights = nn.Parameter(torch.rand(out_features, in_features, device=device, dtype=dtype))
+        # Initialize weights using truncated normal distribution
+        nn.init.trunc_normal_(self.weights)
+        self.need_bias = False
 
+        # Create bias parameter and initialize it
+        if bias:
+            self.need_bias = True
+            self.bias = nn.Parameter(torch.zeros(out_features, device=device, dtype=dtype))
+        
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -41,4 +45,7 @@ class Linear(nn.Module):
         Returns:
             torch.Tensor: Output tensor of shape (..., out_features)
         """
-        return x @ self.weights.T 
+        if self.need_bias:
+            return einsum(x, self.weights, "... in, out in -> ... out") + self.bias
+
+        return einsum(x, self.weights, "... in, out in -> ... out")

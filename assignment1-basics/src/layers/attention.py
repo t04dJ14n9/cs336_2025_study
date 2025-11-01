@@ -6,23 +6,72 @@ from jaxtyping import Float, Int, Bool
 from . import softmax
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int):
+    def __init__(self, d_model: int, num_heads: int, mask: Bool[torch.Tensor, " ... queries keys"] | None = None):
         """
         Initialize the multi-head attention layer.
         Args:
-            d_model: The dimension of the input.
+            d_model: The dimension of the model, equals the dimension of embedding vector for a token.
             num_heads: The number of heads.
         """
         super().__init__()
+        self.h = num_heads
+        self.d_k = d_model // num_heads
+        self.d_v = d_model // num_heads
 
-    def forward(self, Q, K, V, mask=None):
-        pass
+        # initialize projection weights
+        self.w_q = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model)))
+        self.w_k = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model)))
+        self.w_v = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_v, d_model)))
+        self.w_o = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, num_heads * self.d_v)))
+        self.mask = mask
+
+    def forward(self, 
+        Q: Float[torch.Tensor, "batch_size ... seq_len d_model"],
+        K: Float[torch.Tensor, "batch_size ... seq_len d_model"],
+        V: Float[torch.Tensor, "batch_size ... seq_len d_model"],
+        mask: Bool[torch.Tensor, "... seq_len seq_len"] | None=None,
+        ) -> Float[torch.Tensor, "batch_size ... seq_len d_model"]:
+
+        # Project Q, K, V using the weight matrices
+        # w_q, w_k, w_v have shape (num_heads * d_k, d_model)
+        # We want to compute: input @ w.T to get (... seq_len, num_heads * d_k)
+        Q_proj = einsum(Q, self.w_q, "... seq_len d_model, hd_k d_model -> ... seq_len hd_k")
+        K_proj = einsum(K, self.w_k, "... seq_len d_model, hd_k d_model -> ... seq_len hd_k")
+        V_proj = einsum(V, self.w_v, "... seq_len d_model, hd_v d_model -> ... seq_len hd_v")
+
+        # Reshape to separate heads: (... seq_len, num_heads, d_k)
+        Q_proj = rearrange(Q_proj, "... seq_len (h d_k) -> ... seq_len h d_k", h=self.h)
+        K_proj = rearrange(K_proj, "... seq_len (h d_k) -> ... seq_len h d_k", h=self.h)
+        V_proj = rearrange(V_proj, "... seq_len (h d_v) -> ... seq_len h d_v", h=self.h)
+
+        # Compute scaled dot product attention for each head
+        # Rearrange to put head dimension first for easier processing: (... h seq_len d_k)
+        Q_proj = rearrange(Q_proj, "... seq_len h d_k -> ... h seq_len d_k")
+        K_proj = rearrange(K_proj, "... seq_len h d_k -> ... h seq_len d_k")
+        V_proj = rearrange(V_proj, "... seq_len h d_v -> ... h seq_len d_v")
+        
+        # Apply scaled dot product attention
+        # Use the mask parameter from forward, or fall back to self.mask
+        # Output shape: (... h seq_len d_v)
+        attn_mask = mask if mask is not None else self.mask
+        attn_output = scaled_dot_product_attention(Q_proj, K_proj, V_proj, attn_mask)
+        
+        # Rearrange back: (... seq_len h d_v)
+        attn_output = rearrange(attn_output, "... h seq_len d_v -> ... seq_len h d_v")
+
+        # Concatenate the output for each head: (... seq_len, h*d_v)
+        output = rearrange(attn_output, "... seq_len h d_v -> ... seq_len (h d_v)")
+
+        # Project the output and return: (... seq_len, d_model)
+        return einsum(output, self.w_o, "... seq_len hd_v, d_model hd_v -> ... seq_len d_model")
+
+
 
 def scaled_dot_product_attention(
     Q: Float[torch.Tensor, " ... queries d_k"],
-    K: Float[torch.Tensor, " ... keys d_k"],
-    V: Float[torch.Tensor, " ... values d_v"],
-    mask: Bool[torch.Tensor, " ... queries keys"] | None = None,
+    K: Float[torch.Tensor, " ... seq_len d_k"],
+    V: Float[torch.Tensor, " ... seq_len d_v"],
+    mask: Bool[torch.Tensor, " ... queries seq_len"] | None = None,
 ) -> Float[torch.Tensor, " ... queries d_v"]:
     """
     Given key (K), query (Q), and value (V) tensors, return
@@ -30,17 +79,21 @@ def scaled_dot_product_attention(
 
     Args:
         Q (Float[Tensor, " ... queries d_k"]): Query tensor
-        K (Float[Tensor, " ... keys d_k"]): Key tensor
-        V (Float[Tensor, " ... values d_v"]): Values tensor
-        mask (Bool[Tensor, " ... queries keys"] | None): Mask tensor
+        K (Float[Tensor, " ... seq_len d_k"]): Key tensor
+        V (Float[Tensor, " ... seq_len d_v"]): Values tensor
+        mask (Bool[Tensor, " ... queries seq_len"] | None): Mask tensor
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    d_k = Q.shape[-1]
-    scores = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys") / math.sqrt(d_k)
+    d_k = K.shape[-1]
+    assert K.shape[-2] == V.shape[-2]
+
+    # Q * K^T / sqrt(d_k)
+    scores = einsum(Q, K, "... queries d_k, ... seq_len d_k -> ... queries seq_len") / math.sqrt(d_k)
     # Apply mask (mask=True means allow attention, so we mask where mask=False)
     if mask is not None:
         scores = torch.where(mask, scores, torch.tensor(float('-inf')))
     # Apply softmax
     scores = softmax(scores, dim=-1)
-    return einsum(scores, V, "... queries keys, ... keys d_v -> ... queries d_v")
+    # scores * V
+    return einsum(scores, V, "... queries seq_len, ... seq_len d_v -> ... queries d_v")

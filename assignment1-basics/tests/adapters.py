@@ -8,8 +8,9 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+from torch import nn
 
-from src.layers import Linear, Embedding, RMSNorm, FeedForward, RoPE, softmax,scaled_dot_product_attention
+from src.layers import Linear, Embedding, RMSNorm, FeedForward, RoPE, softmax,scaled_dot_product_attention, MultiHeadAttention
 
 
 def run_linear(
@@ -31,7 +32,8 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    linear = Linear(d_in, d_out, device=device, dtype=torch.float32, weights=weights.to(device))
+    linear = Linear(d_in, d_out, device=device, dtype=torch.float32)
+    linear.weights = nn.Parameter(weights.to(device))
 
     return linear.forward(in_features.to(device))
 
@@ -147,7 +149,14 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    multi_head_attention = MultiHeadAttention(d_model, num_heads)
+    multi_head_attention.w_q.data = q_proj_weight
+    multi_head_attention.w_k.data = k_proj_weight
+    multi_head_attention.w_v.data = v_proj_weight
+    multi_head_attention.w_o.data = o_proj_weight
+
+    return multi_head_attention.forward(in_features, in_features, in_features)
+
 
 
 def run_multihead_self_attention_with_rope(
