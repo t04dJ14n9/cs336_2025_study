@@ -57,7 +57,8 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
 
-    embedding = Embedding(vocab_size, d_model, weights=weights)
+    embedding = Embedding(vocab_size, d_model)
+    embedding.weights = nn.Parameter(weights)
     return embedding.forward(token_ids)
 
 
@@ -401,7 +402,8 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    rmsNorm = RMSNorm(d_model=d_model, eps=eps, weights=weights) 
+    rmsNorm = RMSNorm(d_model=d_model, eps=eps)
+    rmsNorm.g = nn.Parameter(weights)
     out_features = rmsNorm.forward(in_features)
     return out_features
     
