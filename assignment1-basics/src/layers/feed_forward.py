@@ -15,11 +15,11 @@ class FeedForward(nn.Module):
         w3: Gate projection weight matrix [d_ff, d_model]
     """
     
-    def __init__(self, d_model: int, d_ff: int):
+    def __init__(self, d_model: int, d_ff: int, device: torch.device | None=None):
         super().__init__()
-        self.w1 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model)))
-        self.w2 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, d_ff)))
-        self.w3 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model)))
+        self.w1 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model, device=device)))
+        self.w2 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, d_ff, device=device)))
+        self.w3 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model, device=device)))
 
 
     def _load_weight(self, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor):

@@ -6,7 +6,7 @@ from jaxtyping import Float, Bool, Int
 from . import softmax, RoPE
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None, pos_encoding: RoPE | None=None):
+    def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None, pos_encoding: bool=False, theta: float=0, max_seq_len: int=1024): 
         """
         Initialize the multi-head attention layer.
         Args:
@@ -25,7 +25,10 @@ class MultiHeadAttention(nn.Module):
         self.w_o = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, num_heads * self.d_v, device=device)))
         
         # initialize positional encoding
-        self.RoPE = pos_encoding 
+        self.RoPE = None
+        if pos_encoding:
+            self.RoPE = RoPE(theta, self.d_k, max_seq_len=max_seq_len, device=device)
+        
 
     def forward(self, 
         Q: Float[torch.Tensor, "... seq_len d_model"],

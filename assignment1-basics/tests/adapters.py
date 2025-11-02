@@ -205,9 +205,7 @@ def run_multihead_self_attention_with_rope(
     # Generate token_positions if not provided
     # perform positional encoding to Q and K
     # RoPE embedding dimension must be the head embedding dimension (d_model // num_heads)
-    d_k = d_model // num_heads
-    pos_encoding = RoPE(theta, d_k, max_seq_len=max_seq_len)
-    multi_head_attention = MultiHeadAttention(d_model, num_heads, pos_encoding=pos_encoding)
+    multi_head_attention = MultiHeadAttention(d_model, num_heads, pos_encoding=True, theta=theta, max_seq_len=max_seq_len)
     multi_head_attention.w_q= nn.Parameter(q_proj_weight)
     multi_head_attention.w_k= nn.Parameter(k_proj_weight)
     multi_head_attention.w_v= nn.Parameter(v_proj_weight)
@@ -313,7 +311,7 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    block = TransformerBlock(d_model, num_heads, d_ff, max_seq_len)
+    block = TransformerBlock(d_model, num_heads, d_ff, max_seq_len, pos_encoding=True, theta=theta)
     # set the weights
     block.MHA.w_q = nn.Parameter(weights['attn.q_proj.weight'])
     block.MHA.w_k = nn.Parameter(weights['attn.k_proj.weight'])
