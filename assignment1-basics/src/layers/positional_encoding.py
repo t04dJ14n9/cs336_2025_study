@@ -13,11 +13,12 @@ class RoPE(nn.Module):
         max_seq_len (int): Maximum sequence length for positional embeddings.
         device (torch.device, optional): Device to store the embeddings on. Defaults to None.
     """
-    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int=1024, device: torch.device|None=None):
         super().__init__()
         self.theta = theta
         self.d_k = d_k
         self.max_seq_len = max_seq_len
+        self.device = device
 
         # pre-compute the rotation matrix
         self.register_buffer('rot_mats', self._compute_rot_mat(), persistent=False)
@@ -34,7 +35,7 @@ class RoPE(nn.Module):
                 mat_list.append(torch.tensor([
                     [math.cos(theta_i_k), -math.sin(theta_i_k)],
                     [math.sin(theta_i_k), math.cos(theta_i_k)],
-                ]))
+                ], device=self.device))
             # Create block diagonal matrix
             rot_mats[i] = torch.block_diag(*mat_list) # the usage of '*' unpacks the list, similar to ... in Golang
         return rot_mats
@@ -52,8 +53,11 @@ class RoPE(nn.Module):
         cos and sin tensors along the sequence dimension.
         """
         # Get rotation matrices for the specified token positions
+        # note that token_positions is a tensor of length seq_len and elements in rot_mats has shape (d_k, d_k)
+        # so rot_mat is of shape (... seq_len, d_k, d_k)
         rot_mat = self.get_buffer('rot_mats')[token_positions]  
         
+        # Apply rotation matrices to input tensor
         return einsum(rot_mat, x, "... seq_len i j, ... seq_len j -> ... seq_len i")
 
         

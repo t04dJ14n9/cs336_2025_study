@@ -11,6 +11,7 @@ from torch import Tensor
 from torch import nn
 
 from src.layers import Linear, Embedding, RMSNorm, FeedForward, RoPE, softmax,scaled_dot_product_attention, MultiHeadAttention
+from src.modules import TransformerBlock
 
 
 def run_linear(
@@ -201,7 +202,17 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    multi_head_attention = MultiHeadAttention(d_model, num_heads)
+    multi_head_attention.w_q= nn.Parameter(q_proj_weight)
+    multi_head_attention.w_k= nn.Parameter(k_proj_weight)
+    multi_head_attention.w_v= nn.Parameter(v_proj_weight)
+    multi_head_attention.w_o= nn.Parameter(o_proj_weight)
+
+    # Create causal mask for decoder-style attention
+    seq_len = in_features.shape[-2]
+    causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=in_features.device)).bool()
+
+    return multi_head_attention.forward(in_features, in_features, in_features, mask=causal_mask)
 
 
 def run_rope(
@@ -297,7 +308,17 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    block = TransformerBlock(d_model, num_heads, d_ff, max_seq_len)
+    # set the weights
+    block.MHA.w_q = nn.Parameter(weights['attn.q_proj.weight'])
+    block.MHA.w_k = nn.Parameter(weights['attn.k_proj.weight'])
+    block.MHA.w_v = nn.Parameter(weights['attn.v_proj.weight'])
+    block.MHA.w_o = nn.Parameter(weights['attn.output_proj.weight'])
+    block.LN[0].g = nn.Parameter(weights['ln1.weight'])
+    block.LN[1].g = nn.Parameter(weights['ln2.weight'])
+    block.FF._load_weight(weights['ffn.w1.weight'], weights['ffn.w2.weight'], weights['ffn.w3.weight'])
+
+    return block.forward(in_features, in_features, in_features)
 
 
 def run_transformer_lm(

@@ -6,7 +6,7 @@ from jaxtyping import Float, Int, Bool
 from . import softmax
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, mask: Bool[torch.Tensor, " ... queries keys"] | None = None):
+    def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None):
         """
         Initialize the multi-head attention layer.
         Args:
@@ -19,11 +19,10 @@ class MultiHeadAttention(nn.Module):
         self.d_v = d_model // num_heads
 
         # initialize projection weights
-        self.w_q = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model)))
-        self.w_k = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model)))
-        self.w_v = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_v, d_model)))
-        self.w_o = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, num_heads * self.d_v)))
-        self.mask = mask
+        self.w_q = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model, device=device)))
+        self.w_k = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model, device=device)))
+        self.w_v = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_v, d_model, device=device)))
+        self.w_o = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, num_heads * self.d_v, device=device)))
 
     def forward(self, 
         Q: Float[torch.Tensor, "batch_size ... seq_len d_model"],
@@ -31,7 +30,6 @@ class MultiHeadAttention(nn.Module):
         V: Float[torch.Tensor, "batch_size ... seq_len d_model"],
         mask: Bool[torch.Tensor, "... seq_len seq_len"] | None=None,
         ) -> Float[torch.Tensor, "batch_size ... seq_len d_model"]:
-
         # Batched approach: project all heads at once
         # w_q, w_k, w_v have shape (num_heads * d_k, d_model)
         # After projection, we get shape (..., seq_len, num_heads * d_k)
