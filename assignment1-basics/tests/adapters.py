@@ -11,7 +11,7 @@ from torch import Tensor
 from torch import nn
 
 from src.layers import Linear, Embedding, RMSNorm, FeedForward, RoPE, softmax,scaled_dot_product_attention, MultiHeadAttention
-from src.modules import TransformerBlock
+from src.modules import TransformerBlock, Transformer
 
 
 def run_linear(
@@ -403,7 +403,37 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    # Initialize the transformer model
+    transformer = Transformer(d_model, vocab_size, context_length, num_layers, num_heads, d_ff, rope_theta)
+    
+    # Load token embeddings
+    transformer.embedding.weights.data = weights['token_embeddings.weight']
+    
+    # Load weights for each transformer layer
+    for layer_idx in range(num_layers):
+        block = transformer.transformer_blocks[layer_idx]
+        
+        # Load multi-head attention weights
+        block.MHA.w_q.data = weights[f'layers.{layer_idx}.attn.q_proj.weight']
+        block.MHA.w_k.data = weights[f'layers.{layer_idx}.attn.k_proj.weight']
+        block.MHA.w_v.data = weights[f'layers.{layer_idx}.attn.v_proj.weight']
+        block.MHA.w_o.data = weights[f'layers.{layer_idx}.attn.output_proj.weight']
+        
+        # Load layer norm weights
+        block.LN[0].g.data = weights[f'layers.{layer_idx}.ln1.weight']
+        block.LN[1].g.data = weights[f'layers.{layer_idx}.ln2.weight']
+        
+        # Load feed-forward network weights
+        block.FF.w1.data = weights[f'layers.{layer_idx}.ffn.w1.weight']
+        block.FF.w2.data = weights[f'layers.{layer_idx}.ffn.w2.weight']
+        block.FF.w3.data = weights[f'layers.{layer_idx}.ffn.w3.weight']
+    
+    # Load final layer norm and language model head weights
+    transformer.layer_norm.g.data = weights['ln_final.weight']
+    transformer.linear.weights.data = weights['lm_head.weight']
+    
+    # Run forward pass and return logits
+    return transformer.forward(in_indices)
 
 
 def run_rmsnorm(

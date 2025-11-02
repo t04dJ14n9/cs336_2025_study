@@ -38,7 +38,7 @@ class Linear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass of the linear layer.
+        Forward pass of the linear layer. Only applies to the last dimension.
         
         Args:
             x (torch.Tensor): Input tensor of shape (..., in_features)
