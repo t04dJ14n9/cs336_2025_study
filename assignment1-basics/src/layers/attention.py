@@ -2,11 +2,11 @@ import torch
 from torch import nn
 from einops import rearrange, einsum
 import math
-from jaxtyping import Float, Int, Bool
-from . import softmax
+from jaxtyping import Float, Bool, Int
+from . import softmax, RoPE
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None):
+    def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None, pos_encoding: RoPE | None=None):
         """
         Initialize the multi-head attention layer.
         Args:
@@ -23,13 +23,18 @@ class MultiHeadAttention(nn.Module):
         self.w_k = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model, device=device)))
         self.w_v = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_v, d_model, device=device)))
         self.w_o = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, num_heads * self.d_v, device=device)))
+        
+        # initialize positional encoding
+        self.RoPE = pos_encoding 
 
     def forward(self, 
-        Q: Float[torch.Tensor, "batch_size ... seq_len d_model"],
-        K: Float[torch.Tensor, "batch_size ... seq_len d_model"],
-        V: Float[torch.Tensor, "batch_size ... seq_len d_model"],
+        Q: Float[torch.Tensor, "... seq_len d_model"],
+        K: Float[torch.Tensor, "... seq_len d_model"],
+        V: Float[torch.Tensor, "... seq_len d_model"],
         mask: Bool[torch.Tensor, "... seq_len seq_len"] | None=None,
-        ) -> Float[torch.Tensor, "batch_size ... seq_len d_model"]:
+        token_positions: Int[torch.Tensor, "... seq_len"] | None=None,
+        ) -> Float[torch.Tensor, "... seq_len d_model"]:
+
         # Batched approach: project all heads at once
         # w_q, w_k, w_v have shape (num_heads * d_k, d_model)
         # After projection, we get shape (..., seq_len, num_heads * d_k)
@@ -42,6 +47,23 @@ class MultiHeadAttention(nn.Module):
         Q_proj = rearrange(Q_proj, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.h)
         K_proj = rearrange(K_proj, "... seq_len (h d_k) -> ... h seq_len d_k", h=self.h)
         V_proj = rearrange(V_proj, "... seq_len (h d_v) -> ... h seq_len d_v", h=self.h)
+
+        # If need to perform positional encoding (apply after reshaping to separate heads)
+        if self.RoPE is not None:
+            # Generate token_positions if not provided
+            if token_positions is None:
+                # Create token positions with same batch dimensions as Q_proj
+                batch_shape = Q_proj.shape[:-2]  # Get all dimensions except seq_len and d_k
+                seq_len = Q_proj.shape[-2]
+                token_positions = torch.arange(seq_len, device=Q.device)
+                # Expand to match batch dimensions: (..., seq_len)
+                for _ in range(len(batch_shape)):
+                    token_positions = token_positions.unsqueeze(0)
+                token_positions = token_positions.expand(*batch_shape, seq_len)
+
+            # Perform encoding on separated heads: (..., h, seq_len, d_k)
+            Q_proj = self.RoPE.forward(Q_proj, token_positions)
+            K_proj = self.RoPE.forward(K_proj, token_positions)
         
         # Compute attention for all heads at once
         # scaled_dot_product_attention expects (..., seq_len, d)

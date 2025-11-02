@@ -57,6 +57,7 @@ class RoPE(nn.Module):
         # so rot_mat is of shape (... seq_len, d_k, d_k)
         rot_mat = self.get_buffer('rot_mats')[token_positions]  
         
+        # raise Exception(f'rot_mat shape: {rot_mat.shape}, x shape: {x.shape}')
         # Apply rotation matrices to input tensor
         return einsum(rot_mat, x, "... seq_len i j, ... seq_len j -> ... seq_len i")
 

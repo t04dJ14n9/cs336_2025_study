@@ -202,7 +202,12 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    multi_head_attention = MultiHeadAttention(d_model, num_heads)
+    # Generate token_positions if not provided
+    # perform positional encoding to Q and K
+    # RoPE embedding dimension must be the head embedding dimension (d_model // num_heads)
+    d_k = d_model // num_heads
+    pos_encoding = RoPE(theta, d_k, max_seq_len=max_seq_len)
+    multi_head_attention = MultiHeadAttention(d_model, num_heads, pos_encoding=pos_encoding)
     multi_head_attention.w_q= nn.Parameter(q_proj_weight)
     multi_head_attention.w_k= nn.Parameter(k_proj_weight)
     multi_head_attention.w_v= nn.Parameter(v_proj_weight)
@@ -212,7 +217,7 @@ def run_multihead_self_attention_with_rope(
     seq_len = in_features.shape[-2]
     causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=in_features.device)).bool()
 
-    return multi_head_attention.forward(in_features, in_features, in_features, mask=causal_mask)
+    return multi_head_attention.forward(in_features, in_features, in_features, mask=causal_mask, token_positions=token_positions)
 
 
 def run_rope(
