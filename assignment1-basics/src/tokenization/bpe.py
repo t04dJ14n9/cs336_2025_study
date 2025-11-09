@@ -58,13 +58,20 @@ class BPE():
                 word = words_in_doc[j]
                 if word in self.word_map: # already processed, increment its count
                     self.word_map[word].count += 1
+                    # Also increment the pair counts for this word occurrence
+                    word_instance = self.word_map[word]
+                    for k in range(len(word_instance.token_list) - 1):
+                        pair = (word_instance.token_list[k], word_instance.token_list[k+1])
+                        self.count_map[pair] += 1
                     continue
                 # create word instance
                 word_instance = Word(raw=word)
                 self.word_map[word] = word_instance
                 for k in range(len(word_instance.token_list) - 1):
                     pair = (word_instance.token_list[k], word_instance.token_list[k+1])
-                    self.count_map[pair] = self.count_map.get(pair, 0) + 1
+                    if pair not in self.count_map:
+                        self.count_map[pair] = 0
+                    self.count_map[pair] += 1
                     if pair not in self.loc_map:
                         self.loc_map[pair] = []
                     self.loc_map[pair].append(word)
@@ -106,43 +113,64 @@ class BPE():
         self.vocab[new_token_index] = self.vocab[token1] + self.vocab[token2]
 
         # update the count of tokens
-        changed_pairs = {(token1, token2): 0}
+        changed_pairs = {(token1, token2): self.count_map[(token1, token2)]}
         for word_raw in self.loc_map[(token1, token2)]:
             # find the index of (token1, token2)
             word = self.word_map[word_raw]
-            for i in range(len(word.token_list)-1):
-                if word.token_list[i] == token1 and word.token_list[i+1] == token2:
-                    if i-1 >= 0:
+            old_token_list = word.token_list
+            new_token_list = []
+            i = 0
+            while i < len(old_token_list):
+                # Check if we have a matching pair
+                if i < len(old_token_list) - 1 and old_token_list[i] == token1 and old_token_list[i+1] == token2:
+                    # Decrement the count for the merged pair
+                    changed_pairs[(token1, token2)] -= word.count
+                    # Handle previous token pair updates
+                    if len(new_token_list) > 0:
                         # update (previous_token, token1)
-                        prev_pair = (word.token_list[i-1], token1)
+                        prev_pair = (new_token_list[-1], token1)
                         if prev_pair not in changed_pairs:
-                            changed_pairs[prev_pair] = self.count_map.pop(prev_pair) # remove merged token in count_map
+                            changed_pairs[prev_pair] = self.count_map[prev_pair]
                         changed_pairs[prev_pair] -= word.count
                         
                         # insert new prev pair
-                        new_prev_pair = (word.token_list[i-1], new_token_index)
+                        new_prev_pair = (new_token_list[-1], new_token_index)
                         if new_prev_pair not in changed_pairs:
                             changed_pairs[new_prev_pair] = 0
                         changed_pairs[new_prev_pair] += word.count
                         if new_prev_pair not in self.loc_map:
                             self.loc_map[new_prev_pair] = []
                         self.loc_map[new_prev_pair].append(word_raw)
-                    if i+2 < len(word.token_list):
+                    
+                    # Handle next token pair updates
+                    if i + 2 < len(old_token_list):
                         # update (token2, latter_token)
-                        latter_pair = (token2, word.token_list[i+2])
+                        latter_pair = (token2, old_token_list[i+2])
                         if latter_pair not in changed_pairs:
-                            changed_pairs[latter_pair] = self.count_map.pop(latter_pair)
+                            changed_pairs[latter_pair] = self.count_map[latter_pair]
                         changed_pairs[latter_pair] -= word.count
                         # insert new later pair
-                        new_latter_pair = (new_token_index, word.token_list[i+2])
+                        new_latter_pair = (new_token_index, old_token_list[i+2])
                         if new_latter_pair not in changed_pairs:
                             changed_pairs[new_latter_pair] = 0
                         changed_pairs[new_latter_pair] += word.count
                         if new_latter_pair not in self.loc_map:
                             self.loc_map[new_latter_pair] = []
                         self.loc_map[new_latter_pair].append(word_raw)
-                    # update word's token list
-                    word.token_list = word.token_list[:i] + [new_token_index] + word.token_list[i+2:]
+                    
+                    # Add the merged token
+                    new_token_list.append(new_token_index)
+                    i += 2  # Skip both tokens that were merged
+                else:
+                    # No match, just copy the token
+                    new_token_list.append(old_token_list[i])
+                    i += 1
+            
+            # Update word's token list
+            word.token_list = new_token_list
+        
+        # Increment vocab_size for the newly created token
+        self.vocab_size += 1
         self.apply_token_count_change(changed_pairs)
 
     def apply_token_count_change(self, changed_pairs: Dict[Tuple[int, int], int]):

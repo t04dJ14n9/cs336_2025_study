@@ -32,14 +32,17 @@ class TestBPEPattern(unittest.TestCase):
                 self.assertEqual(matches, expected, f"Failed for input '{input_str}': expected {expected}, got {matches}")
     
     def test_pre_processing(self):
-        bpe =  BPE('./src/tokenization/corpus_test.txt', special_tokens=['<|endoftext|>'])
+        bpe =  BPE('/data/workspace/Code/cs336/assignment1-basics/src/tokenization/corpus_test.txt', special_tokens=['<|endoftext|>'])
         bpe.preprocess()
         
-        # bpe.train()
         self.assertEqual(bpe.word_map['low'].count,1, 'count of low is 1')
         self.assertEqual(bpe.word_map[' low'].count,4, 'count of  low is 4')
         self.assertEqual(bpe.word_map[' lower'].count, 2, 'count of lower is 2')
         self.assertEqual(bpe.loc_map[(ord('l'), ord('o'))], ['low', ' low', ' lower'])
+        self.assertEqual(bpe.count_map[(ord(' '), ord('l'))], 6)
+
+        vocab, merges = bpe.train()
+        self.assertEqual(vocab[256], b'es')
 if __name__ == '__main__':
     # Run the tests
     unittest.main(verbosity=2)
