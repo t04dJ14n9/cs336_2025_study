@@ -26,7 +26,7 @@ class TransformerBlock(nn.Module):
         # compute the mask
         seq_len = q.shape[-2]
         mask = self.mask[:seq_len, :seq_len]
-
+        'a'.__repr__()
         # compute MHA y = x + MultiHeadSelfAttention(RMSNorm(x))
         x = q + self.MHA.forward(self.LN[0].forward(q), self.LN[0].forward(k), self.LN[0].forward(v), mask=mask)
 
