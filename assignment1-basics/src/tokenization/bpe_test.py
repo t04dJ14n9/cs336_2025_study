@@ -42,7 +42,8 @@ class TestBPEPattern(unittest.TestCase):
         self.assertEqual(bpe.count_map[(ord(' '), ord('l'))], 6)
 
         vocab, merges = bpe.train()
-        self.assertEqual(vocab[256], b'es')
+        # With lexicographically greater tie-breaking, 'st' comes before 'es'
+        self.assertEqual(vocab[256], b'st')
 if __name__ == '__main__':
     # Run the tests
     unittest.main(verbosity=2)
