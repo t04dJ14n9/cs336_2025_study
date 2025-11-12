@@ -1,3 +1,4 @@
-from .bpe import BPE
+from .bpe_trainer import BPETrainer
+from .bpe_tokenizer import BPETokenizer
 
-__all__ = ['BPE']
+__all__ = ['BPETrainer', 'BPETokenizer']

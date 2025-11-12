@@ -12,7 +12,7 @@ from torch import nn
 
 from src.layers import Linear, Embedding, RMSNorm, FeedForward, RoPE, softmax,scaled_dot_product_attention, MultiHeadAttention
 from src.modules import TransformerBlock, Transformer
-from src.tokenization import BPE
+from src.tokenization import BPETrainer, BPETokenizer
 
 
 def run_linear(
@@ -642,7 +642,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    return BPETokenizer(vocab=vocab, merges=merges,special_tokens=special_tokens)
 
 
 def run_train_bpe(
@@ -672,7 +672,7 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    bpe = BPE(input_path, vocab_size=vocab_size, special_tokens=special_tokens)
+    bpe = BPETrainer(input_path, vocab_size=vocab_size, special_tokens=special_tokens)
     bpe.preprocess()
     vocab, merges = bpe.train()
     return vocab, merges

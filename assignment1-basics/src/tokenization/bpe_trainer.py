@@ -2,6 +2,8 @@ import re
 from typing import List, Dict, Tuple
 from queue import PriorityQueue
 import os
+import json
+import base64
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?[a-zA-Z]+| ?[0-9]+| ?[^\s\w]+|\s+(?!\S)|\s+"""
 
@@ -30,7 +32,7 @@ class Word():
         self.token_list = list(raw.encode('utf-8'))
         self.count = 1
 
-class BPE():
+class BPETrainer():
     def __init__(self, input_path: str | os.PathLike, vocab_size: int=10000, special_tokens: List[str]=[]) -> None:
         self.vocab_size = 256 # number of bytes
         self.target_vocab_size = vocab_size
@@ -199,3 +201,89 @@ class BPE():
         for special_token in self.special_tokens:
             self.vocab[self.vocab_size] = special_token.encode('utf-8')
             self.vocab_size += 1
+
+    def serialize(self):
+        """
+        Serialize the tokenizer to a dictionary format.
+        Converts bytes to base64 strings for JSON compatibility.
+        """
+        # Convert vocab: bytes values to base64 strings
+        vocab_serialized = {
+            str(k): base64.b64encode(v).decode('utf-8') 
+            for k, v in self.vocab.items()
+        }
+        
+        # Convert merges: list of (bytes, bytes) tuples to list of [base64_str, base64_str]
+        merges_serialized = [
+            [base64.b64encode(t1).decode('utf-8'), base64.b64encode(t2).decode('utf-8')]
+            for t1, t2 in self.merges
+        ]
+        
+        return {
+            'vocab': vocab_serialized,
+            'merges': merges_serialized,
+            'special_tokens': self.special_tokens,
+            'vocab_size': self.vocab_size,
+            'target_vocab_size': self.target_vocab_size
+        }
+    
+    def save(self, output_path: str | os.PathLike):
+        """
+        Save the tokenizer to a JSON file.
+        
+        Args:
+            output_path: Path where the tokenizer will be saved (e.g., 'tokenizer.json')
+        
+        Example:
+            bpe = BPE('corpus.txt', vocab_size=10000)
+            bpe.preprocess()
+            bpe.train()
+            bpe.save('my_tokenizer.json')
+        """
+        serialized_data = self.serialize()
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(serialized_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"Tokenizer saved to {output_path}")
+    
+    @classmethod
+    def load(cls, input_path: str | os.PathLike):
+        """
+        Load a tokenizer from a JSON file.
+        
+        Args:
+            input_path: Path to the saved tokenizer file
+            
+        Returns:
+            BPE: A BPE tokenizer instance with loaded vocabulary and merges
+            
+        Example:
+            bpe = BPE.load('my_tokenizer.json')
+            # Now you can use bpe.encode() or bpe.decode()
+        """
+        with open(input_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Create a new BPE instance (dummy input_path since we're loading)
+        tokenizer = cls(input_path='', vocab_size=data.get('target_vocab_size', 10000))
+        
+        # Restore vocab: convert base64 strings back to bytes
+        tokenizer.vocab = {
+            int(k): base64.b64decode(v.encode('utf-8'))
+            for k, v in data['vocab'].items()
+        }
+        
+        # Restore merges: convert base64 strings back to bytes tuples
+        tokenizer.merges = [
+            (base64.b64decode(t1.encode('utf-8')), base64.b64decode(t2.encode('utf-8')))
+            for t1, t2 in data['merges']
+        ]
+        
+        # Restore other attributes
+        tokenizer.special_tokens = data.get('special_tokens', [])
+        tokenizer.vocab_size = data.get('vocab_size', 256)
+        tokenizer.target_vocab_size = data.get('target_vocab_size', 10000)
+        
+        print(f"Tokenizer loaded from {input_path}")
+        return tokenizer
