@@ -1,11 +1,10 @@
 import os
-from typing import Tuple, Dict, List
-from .bpe_trainer import PAT
+from typing import Tuple, Dict, List, Iterable
 import re
 import base64
 import json
 
-MERGE_NOT_EXIST = -1
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?[a-zA-Z]+| ?[0-9]+| ?[^\s\w]+|\s+(?!\S)|\s+"""
 
 class BPETokenizer:
     def __init__(self, vocab: Dict[int, bytes]={}, merges: List[Tuple[bytes, bytes]]=[], special_tokens: List[str]|None=None):
@@ -15,67 +14,86 @@ class BPETokenizer:
         self.vocab_size = len(vocab)
 
         self.token_to_id: Dict[bytes, int] = {v: k for k, v in vocab.items()}
-        # create a mapping from two tokens IDs to the ID of the merged token, -1 if it doesn't exist
-        self.merge_exist = {}
-        for merge in merges:
-            left_token_id = self.token_to_id[merge[0]]
-            right_token_id = self.token_to_id[merge[1]]
-            self.merge_exist[(left_token_id, right_token_id)] = self.token_to_id[merge[0] + merge[1]]
-        
-    def pre_tokenize(self, text: str) -> List[bytes]:
-        """
-        pre_tokenize convert text to list of list of UTF-8 bytes
-        """
-        byte_list = []
-        def split_chunk_to_bytes_list(pattern: str, chunk: str) -> List[bytes]:
-            # embedded function to convert string to list of UTF-8 bytes
-            str_list = re.findall(pattern, chunk)
-            return [str.encode() for str in str_list]
 
-        if self.special_tokens is not None: 
-            # split on special token, then regex split on patttern
+        
+    def pre_tokenize(self, text: str) -> List[List[bytes]]:
+        """
+        pre_tokenize convert text to list of strings, which is a list of UTF-8 bytes
+        """
+        # split on special tokens before preprocess
+        if self.special_tokens:
             pattern = "|".join(re.escape(token) for token in self.special_tokens)
-            for chunk in re.split(pattern, text):
-                if chunk == "":
-                    continue
-                byte_list += split_chunk_to_bytes_list(PAT, chunk)
-            return byte_list
-        return split_chunk_to_bytes_list(PAT, text)
+            docs: List[str] = [doc for doc in re.split(pattern, text) if doc]
+        else:
+            docs: List[str] = [text]
+        process_text = []
+        for doc in docs:
+            words_in_doc = re.findall(PAT, doc)
+            for word in words_in_doc:
+                byte_list = []
+                # byte_value is the integer value for the byte
+                for byte_value in word.encode('utf-8'):
+                    # append the byte to the list
+                    byte_list.append(bytes([byte_value]))
+                process_text.append(byte_list)
+        return process_text
 
     def encode(self, text: str) -> List[int]:
         """
         encode convert text to list of token IDs
         """
-        token_id_list = []
-        pre_token_list = self.pre_tokenize(text)
-        # prev_token represent the token examined before, None if not exist
-        prev_token: bytes|None = None
-        for token in pre_token_list:
-            if prev_token == None:
-                prev_token = token 
-                continue
-            # if prev_token exist, examine if they can be merged
-            merge_token_id = self.merge_exist.get((self.token_to_id[prev_token], self.token_to_id[token]), MERGE_NOT_EXIST)
-            if merge_token_id != MERGE_NOT_EXIST:
-                # there is a merge
-                prev_token = prev_token + token
-                continue
-            # merge not exist
-            token_id_list.append(self.token_to_id[prev_token])
-            prev_token = token
-        # end of list, check if there is remaining token unmerged
-        if prev_token is not None:
-            token_id_list.append(self.token_to_id[prev_token])
-        return token_id_list
+        token_ids = []
+        process_text = self.pre_tokenize(text)
+        
+        # Apply all merges
+        for merge in self.merges:
+            # scan through the byte_list to see if there is a match. If there is, merge them.
+            for i in range(len(process_text)):
+                process_text[i] = self._encode_word(process_text[i], merge)
+        
+        # all merge completed, now calculate the token IDs
+        for word in process_text:
+            for token in word:
+                token_ids.append(self.token_to_id[token])
+        return token_ids
+                
+    def _encode_word(self, word: List[bytes], attempted_merge: Tuple[bytes, bytes]) -> List[bytes]:
+        if len(word) <= 1:
+            return word
+            
+        new_word = []
+        i = 0
+        while i < len(word):
+            # Check if we can merge current and next token
+            if i < len(word) - 1 and (word[i], word[i+1]) == attempted_merge:
+                # Merge the two tokens
+                new_word.append(word[i] + word[i+1])
+                i += 2  # Skip the next token since we merged it
+            else:
+                # No merge, just add the current token
+                new_word.append(word[i])
+                i += 1
+        return new_word
+    
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterable[int]:
+        """
+        Given an iterable of strings (e.g., a Python file handle), return a generator that lazily yields token IDs.
+        This is required for memory-efficient tokenization of large files that we cannot directly load into memory.
+        """
+        for text in iterable:
+            token_ids = self.encode(text)
+            for token_id in token_ids:
+                yield token_id
                 
     def decode(self, IDs: List[int]) -> str:
         """
         decode converts list of token IDs back to the original text
         """        
-        text = ""
+        byte_list = []
         for ID in IDs:
-            text += self.vocab[ID].decode()
-        return text
+            byte_list.append(self.vocab[ID])
+        return b''.join(byte_list).decode('utf-8')
+        
 
                 
     @classmethod
@@ -115,12 +133,6 @@ class BPETokenizer:
         tokenizer.special_tokens = data.get('special_tokens', [])
         tokenizer.vocab_size = data.get('vocab_size', 256)
         tokenizer.token_to_id = {v: k for k, v in tokenizer.vocab.items()}
-        # create a mapping from two tokens IDs to the ID of the merged token, -1 if it doesn't exist
-        tokenizer.merge_exist = {}
-        for merge in tokenizer.merges:
-            left_token_id = tokenizer.token_to_id[merge[0]]
-            right_token_id = tokenizer.token_to_id[merge[1]]
-            tokenizer.merge_exist[(left_token_id,right_token_id)] = tokenizer.token_to_id[merge[0] + merge[1]]
-        
+
         print(f"Tokenizer loaded from {input_path}")
         return tokenizer
