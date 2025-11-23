@@ -1,10 +1,10 @@
 import os
 from typing import Tuple, Dict, List, Iterable
-import re
+import regex as re
 import base64
 import json
 
-PAT = r"""'(?:[sdmt]|ll|ve|re)| ?[a-zA-Z]+| ?[0-9]+| ?[^\s\w]+|\s+(?!\S)|\s+"""
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 class BPETokenizer:
     def __init__(self, vocab: Dict[int, bytes]={}, merges: List[Tuple[bytes, bytes]]=[], special_tokens: List[str]|None=None):
@@ -12,8 +12,20 @@ class BPETokenizer:
         self.merges = merges
         self.special_tokens = special_tokens
         self.vocab_size = len(vocab)
+        if special_tokens is not None and len(special_tokens) > 0:
+            for special_token in special_tokens:
+                # print(special_token)
+                if special_token.encode("utf-8") not in vocab.values():
+                    self.vocab[self.vocab_size] = special_token.encode("utf-8")
+                    self.vocab_size += 1
 
         self.token_to_id: Dict[bytes, int] = {v: k for k, v in vocab.items()}
+        
+        # Build merge priority map for efficient lookup
+        # Lower priority value means the merge should be applied earlier
+        self.merge_priority: Dict[Tuple[bytes, bytes], int] = {
+            merge: idx for idx, merge in enumerate(merges)
+        }
 
         
     def pre_tokenize(self, text: str) -> List[List[bytes]]:
@@ -22,20 +34,39 @@ class BPETokenizer:
         """
         # split on special tokens before preprocess
         if self.special_tokens:
-            pattern = "|".join(re.escape(token) for token in self.special_tokens)
+            # Sort special tokens by length (longest first) to handle overlapping tokens correctly
+            # this makes sure longer special tokens are matched before shorter ones.
+            # also notice that capturing group are used, so the special tokens are captured as groups.
+            # example: 
+            # With capturing group:
+            # re.split("(<|endoftext|>)", "Hello <|endoftext|> World") 
+            # Returns: ["Hello ", "<|endoftext|>", " World"]  # Special token preserved! 
+            special_tokens_sorted = sorted(self.special_tokens, key=len, reverse=True)
+            pattern = "(" + "|".join(re.escape(token) for token in special_tokens_sorted) + ")"
             docs: List[str] = [doc for doc in re.split(pattern, text) if doc]
         else:
             docs: List[str] = [text]
+        
         process_text = []
+        special_tokens_set = set(self.special_tokens) if self.special_tokens else set()
+        
         for doc in docs:
-            words_in_doc = re.findall(PAT, doc)
-            for word in words_in_doc:
-                byte_list = []
-                # byte_value is the integer value for the byte
-                for byte_value in word.encode('utf-8'):
-                    # append the byte to the list
-                    byte_list.append(bytes([byte_value]))
+            # since capturing group is used, the special tokens are captured as groups.
+            # requires atomic treatment to handle special tokens
+            if doc in special_tokens_set:
+                # This is a special token, treat it as a single token
+                byte_list = [doc.encode('utf-8')]
                 process_text.append(byte_list)
+            else:
+                # Regular text, apply pre-tokenization pattern
+                words_in_doc = re.findall(PAT, doc)
+                for word in words_in_doc:
+                    byte_list = []
+                    # byte_value is the integer value for the byte
+                    for byte_value in word.encode('utf-8'):
+                        # append the byte to the list
+                        byte_list.append(bytes([byte_value]))
+                    process_text.append(byte_list)
         return process_text
 
     def encode(self, text: str) -> List[int]:
@@ -45,11 +76,9 @@ class BPETokenizer:
         token_ids = []
         process_text = self.pre_tokenize(text)
         
-        # Apply all merges
-        for merge in self.merges:
-            # scan through the byte_list to see if there is a match. If there is, merge them.
-            for i in range(len(process_text)):
-                process_text[i] = self._encode_word(process_text[i], merge)
+        # Apply merges efficiently using priority-based approach
+        for i in range(len(process_text)):
+            process_text[i] = self._encode_word_optimized(process_text[i])
         
         # all merge completed, now calculate the token IDs
         for word in process_text:
@@ -75,6 +104,52 @@ class BPETokenizer:
                 i += 1
         return new_word
     
+    def _encode_word_optimized(self, word: List[bytes]) -> List[bytes]:
+        """
+        Optimized word encoding using priority-based merging.
+        Instead of iterating through all merges, we find possible merges
+        and apply them in priority order.
+        """
+        if len(word) <= 1:
+            return word
+        
+        # Keep merging until no more merges are possible
+        while len(word) > 1:
+            # Find all possible merge pairs in the current word with their priorities
+            possible_merges = {}
+            for i in range(len(word) - 1):
+                pair = (word[i], word[i+1])
+                if pair in self.merge_priority:
+                    priority = self.merge_priority[pair]
+                    # Store the position with the lowest priority (earliest merge)
+                    if pair not in possible_merges or priority < possible_merges[pair][0]:
+                        possible_merges[pair] = (priority, i)
+            
+            # If no merges are possible, we're done
+            if not possible_merges:
+                break
+            
+            # Find the merge with the highest priority (lowest priority value)
+            best_pair = min(possible_merges.items(), key=lambda x: x[1][0])
+            merge_pair = best_pair[0]
+            merge_pos = best_pair[1][1]
+            
+            # Apply the best merge at its position
+            new_word = []
+            i = 0
+            while i < len(word):
+                if i == merge_pos:
+                    # Merge at this position
+                    new_word.append(word[i] + word[i+1])
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            
+            word = new_word
+        
+        return word
+    
     def encode_iterable(self, iterable: Iterable[str]) -> Iterable[int]:
         """
         Given an iterable of strings (e.g., a Python file handle), return a generator that lazily yields token IDs.
@@ -92,7 +167,7 @@ class BPETokenizer:
         byte_list = []
         for ID in IDs:
             byte_list.append(self.vocab[ID])
-        return b''.join(byte_list).decode('utf-8')
+        return b''.join(byte_list).decode('utf-8', errors='replace')
         
 
                 
