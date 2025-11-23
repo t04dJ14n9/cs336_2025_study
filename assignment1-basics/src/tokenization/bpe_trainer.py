@@ -4,6 +4,9 @@ from queue import PriorityQueue
 import os
 import json
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
+from multiprocessing import cpu_count
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -33,7 +36,7 @@ class Word():
         self.count = 1
 
 class BPETrainer():
-    def __init__(self, input_path: str | os.PathLike, vocab_size: int=10000, special_tokens: List[str]=[]) -> None:
+    def __init__(self, input_path: str | os.PathLike, vocab_size: int=10000, special_tokens: List[str]=[], num_threads: int=None) -> None:
         self.vocab_size = 256 # number of bytes
         self.target_vocab_size = vocab_size
         self.special_tokens = special_tokens
@@ -42,53 +45,110 @@ class BPETrainer():
         self.merges: List[Tuple[bytes, bytes]] = []
         self.loc_map: Dict[Tuple[int, int], List[str]] = {} # maps from adjacent tokens to words that it appears
         self.word_map: Dict[str, Word] = {} # maps from raw string to Word struct
+        self.num_threads = num_threads if num_threads is not None else min(cpu_count(), 8)
+        # Thread-safety locks for shared data structures
+        self._word_map_lock = Lock()
+        self._count_map_lock = Lock()
+        self._loc_map_lock = Lock()
+
+    def _process_document_chunk(self, doc: str) -> Tuple[Dict[str, Word], Dict[Tuple[int, int], int], Dict[Tuple[int, int], List[str]]]:
+        """
+        Process a single document chunk and return local word_map, count_map, and loc_map.
+        This function is thread-safe as it only works on local data structures.
+        """
+        local_word_map = {}
+        local_count_map = {}
+        local_loc_map = {}
+        
+        words_in_doc = re.findall(PAT, doc)
+        for word in words_in_doc:
+            if word in local_word_map:
+                # Already processed in this chunk, increment its count
+                local_word_map[word].count += 1
+                # Also increment the pair counts for this word occurrence
+                word_instance = local_word_map[word]
+                for k in range(len(word_instance.token_list) - 1):
+                    pair = (word_instance.token_list[k], word_instance.token_list[k+1])
+                    local_count_map[pair] = local_count_map.get(pair, 0) + 1
+            else:
+                # Create word instance
+                word_instance = Word(raw=word)
+                local_word_map[word] = word_instance
+                for k in range(len(word_instance.token_list) - 1):
+                    pair = (word_instance.token_list[k], word_instance.token_list[k+1])
+                    local_count_map[pair] = local_count_map.get(pair, 0) + 1
+                    if pair not in local_loc_map:
+                        local_loc_map[pair] = []
+                    local_loc_map[pair].append(word)
+        
+        return local_word_map, local_count_map, local_loc_map
+    
+    def _merge_local_results(self, local_word_map: Dict[str, Word], local_count_map: Dict[Tuple[int, int], int], 
+                            local_loc_map: Dict[Tuple[int, int], List[str]]):
+        """
+        Merge local results from a thread into the global data structures.
+        This function uses locks to ensure thread-safety.
+        """
+        # Merge word_map
+        with self._word_map_lock:
+            for word, word_instance in local_word_map.items():
+                if word in self.word_map:
+                    self.word_map[word].count += word_instance.count
+                else:
+                    self.word_map[word] = word_instance
+        
+        # Merge count_map
+        with self._count_map_lock:
+            for pair, count in local_count_map.items():
+                self.count_map[pair] = self.count_map.get(pair, 0) + count
+        
+        # Merge loc_map
+        with self._loc_map_lock:
+            for pair, words in local_loc_map.items():
+                if pair not in self.loc_map:
+                    self.loc_map[pair] = []
+                self.loc_map[pair].extend(words)
 
     # preprocess separates raw corpus into words for training
     def preprocess(self):
+        """
+        Preprocess the corpus using multi-threading for improved performance.
+        Documents are processed in parallel, and results are merged into global data structures.
+        """
         # read corpus
         with open(self.input_path, "r") as f:
             corpus = f.read()
-        # TODO optimize using multi threading
+        
         # split on special tokens before preprocess
         if self.special_tokens:
             pattern = "|".join(re.escape(token) for token in self.special_tokens)
             self.docs: List[str] = [doc for doc in re.split(pattern, corpus) if doc]
         else:
             self.docs: List[str] = [corpus]
-        self.count_map: Dict[Tuple[int, int], int] = {} # count_map maps adjacent token to their count
+        
+        # Initialize data structures
+        self.count_map: Dict[Tuple[int, int], int] = {}
         self.count_queue: PriorityQueue = PriorityQueue()
         self.loc_map = {}
 
-        # preprocess corpus, store the count of each adjacent pairs in corpus in count_map
-        for i in range(len(self.docs)):
-            doc = self.docs[i]
-            words_in_doc = re.findall(PAT, doc)
-            for j in range(len(words_in_doc)):
-                word = words_in_doc[j]
-                if word in self.word_map: # already processed, increment its count
-                    self.word_map[word].count += 1
-                    # Also increment the pair counts for this word occurrence
-                    word_instance = self.word_map[word]
-                    for k in range(len(word_instance.token_list) - 1):
-                        pair = (word_instance.token_list[k], word_instance.token_list[k+1])
-                        self.count_map[pair] += 1
-                    continue
-                # create word instance
-                word_instance = Word(raw=word)
-                self.word_map[word] = word_instance
-                for k in range(len(word_instance.token_list) - 1):
-                    pair = (word_instance.token_list[k], word_instance.token_list[k+1])
-                    if pair not in self.count_map:
-                        self.count_map[pair] = 0
-                    self.count_map[pair] += 1
-                    if pair not in self.loc_map:
-                        self.loc_map[pair] = []
-                    self.loc_map[pair].append(word)
-
-
+        # Process documents in parallel using ThreadPoolExecutor
+        print(f"Processing {len(self.docs)} documents using {self.num_threads} threads...")
+        
+        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            # Submit all documents for processing
+            futures = [executor.submit(self._process_document_chunk, doc) for doc in self.docs]
+            
+            # Collect and merge results as they complete
+            for future in as_completed(futures):
+                local_word_map, local_count_map, local_loc_map = future.result()
+                self._merge_local_results(local_word_map, local_count_map, local_loc_map)
+        
+        print(f"Processed {len(self.word_map)} unique words")
+        
+        # Build priority queue from count_map
         for pairs, count in self.count_map.items():
             pair_bytes = (self.vocab[pairs[0]], self.vocab[pairs[1]])
-            self.count_queue.put(PriorityItem(count, pairs, pair_bytes)) # priority queue will pop maximum item first
+            self.count_queue.put(PriorityItem(count, pairs, pair_bytes))
 
 
 

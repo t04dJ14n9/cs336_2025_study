@@ -1,10 +1,144 @@
 import os
-from typing import Tuple, Dict, List, Iterable
+from typing import Tuple, Dict, List, Iterable, BinaryIO
 import regex as re
 import base64
 import json
+import time
+from threading import Thread
+from queue import Queue
+from multiprocessing import cpu_count
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+
+def find_chunk_boundaries(
+    file: BinaryIO,
+    desired_num_chunks: int,
+    split_special_token: bytes,
+) -> list[int]:
+    """
+    Chunk the file into parts that can be counted independently.
+    May return fewer chunks if the boundaries end up overlapping.
+    
+    Args:
+        file: Binary file handle opened in 'rb' mode
+        desired_num_chunks: Target number of chunks to create
+        split_special_token: Special token (as bytes) to use as chunk boundary
+        
+    Returns:
+        List of byte positions representing chunk boundaries (including 0 and file_size)
+    """
+    assert isinstance(split_special_token, bytes), "Must represent special token as a bytestring"
+
+    # Get total file size in bytes
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+
+    chunk_size = file_size // desired_num_chunks
+
+    # Initial guesses for chunk boundary locations, uniformly spaced
+    # Chunks start on previous index, don't include last index
+    chunk_boundaries = [i * chunk_size for i in range(desired_num_chunks + 1)]
+    chunk_boundaries[-1] = file_size
+
+    mini_chunk_size = 4096  # Read ahead by 4k bytes at a time
+
+    for bi in range(1, len(chunk_boundaries) - 1):
+        initial_position = chunk_boundaries[bi]
+        file.seek(initial_position)  # Start at boundary guess
+        while True:
+            mini_chunk = file.read(mini_chunk_size)  # Read a mini chunk
+
+            # If EOF, this boundary should be at the end of the file
+            if mini_chunk == b"":
+                chunk_boundaries[bi] = file_size
+                break
+
+            # Find the special token in the mini chunk
+            found_at = mini_chunk.find(split_special_token)
+            if found_at != -1:
+                chunk_boundaries[bi] = initial_position + found_at
+                break
+            initial_position += mini_chunk_size
+
+    # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
+    return sorted(set(chunk_boundaries))
+
+
+def _process_chunk_worker(job_queue: Queue, result_queue: Queue, tokenizer_state: Tuple):
+    """
+    Worker goroutine (thread) for parallel processing of file chunks.
+    Mimics Go's goroutine pattern: reads jobs from a channel (queue),
+    processes them, and sends results to another channel.
+    
+    Args:
+        job_queue: Queue containing (job_id, file_path, start, end) tuples
+        result_queue: Queue to send (job_id, result) tuples
+        tokenizer_state: Tuple of (vocab, merges, special_tokens)
+    """
+    # Reconstruct tokenizer from state (done once per goroutine)
+    vocab, merges, special_tokens = tokenizer_state
+    tokenizer = BPETokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
+    
+    # Keep processing jobs until receiving None (sentinel value)
+    while True:
+        job = job_queue.get()
+        if job is None:  # Sentinel value to stop the goroutine
+            job_queue.task_done()
+            break
+        
+        job_id, file_path, start, end = job
+        
+        try:
+            # Read the chunk
+            with open(file_path, 'rb') as f:
+                f.seek(start)
+                chunk = f.read(end - start).decode('utf-8', errors='ignore')
+            
+            # Pre-tokenize the chunk
+            result = tokenizer.pre_tokenize(chunk)
+            result_queue.put((job_id, result))
+        except Exception as e:
+            # Send error result
+            result_queue.put((job_id, None, str(e)))
+        finally:
+            job_queue.task_done()
+
+
+def _process_text_chunk_worker(job_queue: Queue, result_queue: Queue, tokenizer_state: Tuple):
+    """
+    Worker goroutine (thread) for parallel processing of text chunks.
+    Mimics Go's goroutine pattern with channels (queues).
+    
+    Args:
+        job_queue: Queue containing (job_id, text_chunk) tuples
+        result_queue: Queue to send (job_id, result) tuples
+        tokenizer_state: Tuple of (vocab, merges, special_tokens)
+    """
+    # Reconstruct tokenizer from state (done once per goroutine)
+    vocab, merges, special_tokens = tokenizer_state
+    tokenizer = BPETokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
+    
+    # Keep processing jobs until receiving None (sentinel value)
+    while True:
+        job = job_queue.get()
+        if job is None:  # Sentinel value to stop the goroutine
+            job_queue.task_done()
+            break
+        
+        job_id, text_chunk = job
+        
+        try:
+            # Pre-tokenize the chunk
+            result = tokenizer.pre_tokenize(text_chunk)
+            result_queue.put((job_id, result))
+        except Exception as e:
+            # Send error result
+            result_queue.put((job_id, None, str(e)))
+        finally:
+            job_queue.task_done()
+
 
 class BPETokenizer:
     def __init__(self, vocab: Dict[int, bytes]={}, merges: List[Tuple[bytes, bytes]]=[], special_tokens: List[str]|None=None):
@@ -69,15 +203,143 @@ class BPETokenizer:
                     process_text.append(byte_list)
         return process_text
 
-    def encode(self, text: str) -> List[int]:
+    def pre_tokenize_parallel(
+        self,
+        text: str,
+        num_processes: int = None,
+        split_special_token: str = "<|endoftext|>",
+        min_chunk_size: int = 10000
+    ) -> List[List[bytes]]:
+        """
+        Pre-tokenize text using parallel processing.
+        The text is split into chunks at special token boundaries, and each chunk
+        is processed in parallel.
+        
+        Args:
+            text: Text to pre-tokenize
+            num_processes: Number of parallel processes to use (default: CPU count)
+            split_special_token: Special token to use as chunk boundary
+            min_chunk_size: Minimum characters per chunk (default: 10000)
+            
+        Returns:
+            List of pre-tokenized words (each word is a list of bytes)
+        """
+        # For small texts, use sequential processing to avoid overhead
+        if len(text) < min_chunk_size * 2:
+            return self.pre_tokenize(text)
+        
+        if num_processes is None:
+            num_processes = cpu_count()
+        
+        # Use regex to split while preserving the special token
+        # This creates a pattern that captures the special token
+        pattern = f"({re.escape(split_special_token)})"
+        parts = re.split(pattern, text)
+        
+        # Reconstruct chunks with special tokens
+        chunks = []
+        for i in range(0, len(parts)):
+            if parts[i]:  # Skip empty strings
+                chunks.append(parts[i])
+        
+        # Calculate approximate chunk size
+        total_chars = sum(len(chunk) for chunk in chunks)
+        target_chunk_size = total_chars // num_processes
+        
+        # Group chunks to achieve target size while preserving special tokens
+        grouped_chunks = []
+        current_group = []
+        current_size = 0
+        
+        for chunk in chunks:
+            current_group.append(chunk)
+            current_size += len(chunk)
+            
+            # Create a new group if we've reached target size and haven't reached max groups
+            if current_size >= target_chunk_size and len(grouped_chunks) < num_processes - 1:
+                grouped_chunks.append("".join(current_group))
+                current_group = []
+                current_size = 0
+        
+        # Add remaining chunks
+        if current_group:
+            grouped_chunks.append("".join(current_group))
+        
+        # If we have fewer chunks than processes, just use sequential processing
+        if len(grouped_chunks) <= 1:
+            return self.pre_tokenize(text)
+        
+        # Go-style concurrency: Create channels (queues) for communication
+        job_queue = Queue()
+        result_queue = Queue()
+        
+        # Prepare tokenizer state for workers
+        tokenizer_state = (self.vocab, self.merges, self.special_tokens)
+        
+        # Launch goroutines (threads) - similar to Go's "go func()"
+        num_workers = min(num_processes, len(grouped_chunks))
+        workers = []
+        for _ in range(num_workers):
+            worker = Thread(
+                target=_process_text_chunk_worker,
+                args=(job_queue, result_queue, tokenizer_state)
+            )
+            worker.daemon = True
+            worker.start()
+            workers.append(worker)
+        
+        # Send jobs to the job channel (queue)
+        for job_id, chunk in enumerate(grouped_chunks):
+            job_queue.put((job_id, chunk))
+        
+        # Send sentinel values to stop workers (like closing a channel in Go)
+        for _ in range(num_workers):
+            job_queue.put(None)
+        
+        # Collect results from the result channel (queue)
+        # Store results with their job_id to maintain order
+        results = {}
+        for _ in range(len(grouped_chunks)):
+            job_id, result = result_queue.get()
+            results[job_id] = result
+        
+        # Wait for all goroutines to finish
+        for worker in workers:
+            worker.join()
+        
+        # Flatten results in order
+        all_pre_tokens = []
+        for job_id in sorted(results.keys()):
+            all_pre_tokens.extend(results[job_id])
+        
+        return all_pre_tokens
+    
+    def encode(self, text: str, use_parallel: bool = False, num_processes: int = 0) -> List[int]:
         """
         encode convert text to list of token IDs
+        
+        Args:
+            text: Text to encode
+            use_parallel: Whether to use parallel pre-tokenization (default: False)
+            num_processes: Number of parallel processes (only used if use_parallel=True)
+            
+        Returns:
+            List of token IDs
         """
         token_ids = []
-        process_text = self.pre_tokenize(text)
+        
+        # Use parallel or sequential pre-tokenization
+        if use_parallel:
+            process_text = self.pre_tokenize_parallel(text, num_processes=num_processes)
+        else:
+            process_text = self.pre_tokenize(text)
+
+        print(f'{time.time()}: Pre-tokenization completed')
         
         # Apply merges efficiently using priority-based approach
         for i in range(len(process_text)):
+            if i % 50000 == 0:
+                print(f'{time.time()}: Encoding word {i}')
             process_text[i] = self._encode_word_optimized(process_text[i])
         
         # all merge completed, now calculate the token IDs
@@ -159,6 +421,121 @@ class BPETokenizer:
             token_ids = self.encode(text)
             for token_id in token_ids:
                 yield token_id
+    
+    def pre_tokenize_file_parallel(
+        self, 
+        file_path: str | os.PathLike, 
+        num_processes: int = None,
+        split_special_token: str = "<|endoftext|>"
+    ) -> List[List[bytes]]:
+        """
+        Pre-tokenize a large file using parallel processing.
+        The file is split into chunks at special token boundaries, and each chunk
+        is processed in parallel.
+        
+        Args:
+            file_path: Path to the file to pre-tokenize
+            num_processes: Number of parallel processes to use (default: CPU count)
+            split_special_token: Special token to use as chunk boundary
+            
+        Returns:
+            List of pre-tokenized words (each word is a list of bytes)
+            
+        Example:
+            tokenizer = BPETokenizer.load('tokenizer.json')
+            pre_tokens = tokenizer.pre_tokenize_file_parallel('large_file.txt', num_processes=4)
+        """
+        if num_processes is None:
+            num_processes = cpu_count()
+        
+        # Find chunk boundaries
+        with open(file_path, 'rb') as f:
+            boundaries = find_chunk_boundaries(f, num_processes, split_special_token.encode('utf-8'))
+        
+        # Go-style concurrency: Create channels (queues) for communication
+        job_queue = Queue()
+        result_queue = Queue()
+        
+        # Prepare tokenizer state for workers
+        tokenizer_state = (self.vocab, self.merges, self.special_tokens)
+        
+        # Calculate number of chunks
+        chunks = list(zip(boundaries[:-1], boundaries[1:]))
+        num_chunks = len(chunks)
+        
+        # Launch goroutines (threads) - similar to Go's "go func()"
+        num_workers = min(num_processes, num_chunks)
+        workers = []
+        for _ in range(num_workers):
+            worker = Thread(
+                target=_process_chunk_worker,
+                args=(job_queue, result_queue, tokenizer_state)
+            )
+            worker.daemon = True
+            worker.start()
+            workers.append(worker)
+        
+        # Send jobs to the job channel (queue)
+        for job_id, (start, end) in enumerate(chunks):
+            job_queue.put((job_id, file_path, start, end))
+        
+        # Send sentinel values to stop workers (like closing a channel in Go)
+        for _ in range(num_workers):
+            job_queue.put(None)
+        
+        # Collect results from the result channel (queue)
+        # Store results with their job_id to maintain order
+        results = {}
+        for _ in range(num_chunks):
+            job_id, result = result_queue.get()
+            results[job_id] = result
+        
+        # Wait for all goroutines to finish
+        for worker in workers:
+            worker.join()
+        
+        # Flatten results in order
+        all_pre_tokens = []
+        for job_id in sorted(results.keys()):
+            all_pre_tokens.extend(results[job_id])
+        
+        return all_pre_tokens
+    
+    def encode_file_parallel(
+        self,
+        file_path: str | os.PathLike,
+        num_processes: int = None,
+        split_special_token: str = "<|endoftext|>"
+    ) -> List[int]:
+        """
+        Encode a large file using parallel pre-tokenization.
+        
+        Args:
+            file_path: Path to the file to encode
+            num_processes: Number of parallel processes to use (default: CPU count)
+            split_special_token: Special token to use as chunk boundary
+            
+        Returns:
+            List of token IDs
+            
+        Example:
+            tokenizer = BPETokenizer.load('tokenizer.json')
+            token_ids = tokenizer.encode_file_parallel('large_file.txt', num_processes=4)
+        """
+        # Pre-tokenize in parallel
+        process_text = self.pre_tokenize_file_parallel(file_path, num_processes, split_special_token)
+        
+        # Apply merges (this part is still sequential, but pre-tokenization is the bottleneck)
+        for i in range(len(process_text)):
+            process_text[i] = self._encode_word_optimized(process_text[i])
+        
+        # Convert to token IDs
+        token_ids = []
+        for word in process_text:
+            for token in word:
+                token_ids.append(self.token_to_id[token])
+        
+        return token_ids
                 
     def decode(self, IDs: List[int]) -> str:
         """
@@ -208,6 +585,11 @@ class BPETokenizer:
         tokenizer.special_tokens = data.get('special_tokens', [])
         tokenizer.vocab_size = data.get('vocab_size', 256)
         tokenizer.token_to_id = {v: k for k, v in tokenizer.vocab.items()}
+        
+        # Rebuild merge priority map for efficient lookup
+        tokenizer.merge_priority = {
+            merge: idx for idx, merge in enumerate(tokenizer.merges)
+        }
 
         print(f"Tokenizer loaded from {input_path}")
         return tokenizer
