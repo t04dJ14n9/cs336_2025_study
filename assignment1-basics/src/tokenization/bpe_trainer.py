@@ -1,11 +1,11 @@
-import re
+import regex as re
 from typing import List, Dict, Tuple
 from queue import PriorityQueue
 import os
 import json
 import base64
 
-PAT = r"""'(?:[sdmt]|ll|ve|re)| ?[a-zA-Z]+| ?[0-9]+| ?[^\s\w]+|\s+(?!\S)|\s+"""
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 class PriorityItem:
     """Wrapper class for priority queue items with custom comparison logic"""
