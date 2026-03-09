@@ -118,6 +118,14 @@ def get_ddp_individual_parameters(module: nn.Module) -> nn.Module:
     return DDPIndividualParameters(module)
 
 
+def ddp_individual_on_train_batch_start(
+    ddp_model: nn.Module,
+    optimizer: torch.optim.Optimizer
+):
+    """No-op for individual-parameter DDP — nothing to do at batch start."""
+    pass
+
+
 def ddp_individual_parameters_on_after_backward(
     ddp_model: nn.Module, 
     optimizer: torch.optim.Optimizer

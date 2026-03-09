@@ -50,19 +50,18 @@ class FlashAttentionPytorch(torch.autograd.Function):
             )
             scores = scores.masked_fill(mask, float('-inf'))
         
-        # Softmax with numerical stability
-        # Instead of storing full attention matrix, store log-sum-exp for backward
-        max_scores = scores.max(dim=-1, keepdim=True).values  # (batch, n_queries, 1)
-        scores_stable = scores - max_scores
-        attn_weights = F.softmax(scores_stable, dim=-1)  # (batch, n_queries, n_keys)
-        
+        # Compute log-sum-exp for numerical stability and backward recomputation
+        # L = log(sum(exp(scores))) per query — shape (batch, n_queries)
+        L = torch.logsumexp(scores, dim=-1)  # (batch, n_queries)
+
+        # Softmax via LSE: P = exp(scores - L.unsqueeze(-1))
+        attn_weights = torch.exp(scores - L.unsqueeze(-1))  # (batch, n_queries, n_keys)
+
         # Compute output
         output = torch.bmm(attn_weights, v)  # (batch, n_queries, d)
-        
-        # Save for backward:
-        # - Don't save full attention matrix (saves memory)
-        # - Save Q, K, V for backward recomputation
-        ctx.save_for_backward(q, k, v, max_scores.squeeze(-1))
+
+        # Save L (log-sum-exp) for backward — avoids storing full attention matrix
+        ctx.save_for_backward(q, k, v, L)
         ctx.is_causal = is_causal
         ctx.scale = scale
         

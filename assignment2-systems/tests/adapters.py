@@ -4,7 +4,7 @@ import torch.distributed as dist
 from typing import Type
 from torch import Tensor
 
-from cs336_basics.model import TransformerLM
+from cs336_basics.model import BasicsTransformerLM as TransformerLM
 
 
 def get_transformer_lm() -> type:
@@ -65,13 +65,13 @@ def get_bpe_trainer():
     return train_bpe
 
 
-def get_flash_attention_pytorch():
+def get_flashattention_autograd_function_pytorch():
     """Returns FlashAttention PyTorch autograd function."""
     from cs336_systems.flash_attention_pytorch import get_flashattention_autograd_function_pytorch
     return get_flashattention_autograd_function_pytorch()
 
 
-def get_flash_attention_triton():
+def get_flashattention_autograd_function_triton():
     """Returns FlashAttention Triton implementation."""
     # Triton requires GPU - return None for CPU testing
     return None
@@ -93,8 +93,8 @@ def get_ddp_individual_parameters(module: torch.nn.Module) -> torch.nn.Module:
     Returns:
         Instance of a DDP class.
     """
-    from cs336_systems.ddp_individual import DDPIndividual
-    return DDPIndividual(module)
+    from cs336_systems.ddp_individual import DDPIndividualParameters
+    return DDPIndividualParameters(module)
 
 
 def ddp_individual_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
@@ -108,7 +108,7 @@ def ddp_individual_on_after_backward(ddp_model: torch.nn.Module, optimizer: torc
         optimizer: torch.optim.Optimizer
             Optimizer being used with the DDP-wrapped model.
     """
-    from cs336_systems.ddp_individual import ddp_individual_on_after_backward as _on_after_backward
+    from cs336_systems.ddp_individual import ddp_individual_parameters_on_after_backward as _on_after_backward
     _on_after_backward(ddp_model, optimizer)
 
 
