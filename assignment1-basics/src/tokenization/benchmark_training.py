@@ -11,16 +11,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.tokenization.bpe_trainer import BPETrainer
 
 
-def benchmark_training(input_path: str, vocab_size: int, num_threads: int, special_tokens: list | None = None):
+def benchmark_training(input_path: str, vocab_size: int, num_threads: int, special_tokens: list[str] | None = None) -> tuple[float, float, float]:
     """
     Benchmark BPE training with specified number of threads.
-    
+
     Args:
         input_path: Path to training corpus
         vocab_size: Target vocabulary size
         num_threads: Number of threads to use
         special_tokens: List of special tokens
-        
+
     Returns:
         Tuple of (preprocess_time, train_time, total_time)
     """
@@ -88,8 +88,8 @@ def main():
     
     # Test different thread counts
     thread_counts = [1, 2, 4, 8]
-    results = {}
-    
+    results: dict[int, dict[str, float]] = {}
+
     for num_threads in thread_counts:
         try:
             preprocess_time, train_time, total_time = benchmark_training(
@@ -106,19 +106,19 @@ def main():
         except Exception as e:
             print(f"Error with {num_threads} threads: {e}")
             continue
-    
+
     # Print comparison
     print(f"\n{'='*80}")
     print("Performance Comparison")
     print(f"{'='*80}")
     print(f"{'Threads':<10} {'Preprocess':<15} {'Train':<15} {'Total':<15} {'Speedup':<10}")
     print(f"{'-'*80}")
-    
-    baseline_time = results[1]['total'] if 1 in results else None
-    
+
+    baseline_time: float | None = results[1]['total'] if 1 in results else None
+
     for num_threads in sorted(results.keys()):
         result = results[num_threads]
-        speedup = baseline_time / result['total'] if baseline_time else 1.0
+        speedup: float = baseline_time / result['total'] if baseline_time else 1.0
         print(f"{num_threads:<10} {result['preprocess']:<15.2f} {result['train']:<15.2f} "
               f"{result['total']:<15.2f} {speedup:<10.2f}x")
     
@@ -127,24 +127,24 @@ def main():
         print(f"\n{'='*80}")
         print("Analysis")
         print(f"{'='*80}")
-        
-        best_threads = min(results.keys(), key=lambda k: results[k]['total'])
-        best_time = results[best_threads]['total']
-        
+
+        best_threads: int = min(results.keys(), key=lambda k: results[k]['total'])
+        best_time: float = results[best_threads]['total']
+
         print(f"✅ Best performance: {best_threads} thread(s) with {best_time:.2f}s total time")
-        
+
         if baseline_time:
-            best_speedup = baseline_time / best_time
+            best_speedup: float = baseline_time / best_time
             print(f"✅ Maximum speedup: {best_speedup:.2f}x compared to single-threaded")
-        
+
         # Calculate preprocessing speedup
         if 1 in results and best_threads in results:
-            preprocess_speedup = results[1]['preprocess'] / results[best_threads]['preprocess']
+            preprocess_speedup: float = results[1]['preprocess'] / results[best_threads]['preprocess']
             print(f"✅ Preprocessing speedup: {preprocess_speedup:.2f}x")
-            
+
             # Calculate throughput
-            throughput_single = file_size_mb / results[1]['preprocess']
-            throughput_multi = file_size_mb / results[best_threads]['preprocess']
+            throughput_single: float = file_size_mb / results[1]['preprocess']
+            throughput_multi: float = file_size_mb / results[best_threads]['preprocess']
             print(f"\nThroughput comparison:")
             print(f"  Single-threaded: {throughput_single:.2f} MB/s")
             print(f"  Multi-threaded ({best_threads} threads): {throughput_multi:.2f} MB/s")

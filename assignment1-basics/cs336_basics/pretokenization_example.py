@@ -14,9 +14,9 @@ def find_chunk_boundaries(
     assert isinstance(split_special_token, bytes), "Must represent special token as a bytestring"
 
     # Get total file size in bytes
-    file.seek(0, os.SEEK_END)
+    _ = file.seek(0, os.SEEK_END)
     file_size = file.tell()
-    file.seek(0)
+    _ = file.seek(0)
 
     chunk_size = file_size // desired_num_chunks
 
@@ -29,7 +29,7 @@ def find_chunk_boundaries(
 
     for bi in range(1, len(chunk_boundaries) - 1):
         initial_position = chunk_boundaries[bi]
-        file.seek(initial_position)  # Start at boundary guess
+        _ = file.seek(initial_position)  # Start at boundary guess
         while True:
             mini_chunk = file.read(mini_chunk_size)  # Read a mini chunk
 

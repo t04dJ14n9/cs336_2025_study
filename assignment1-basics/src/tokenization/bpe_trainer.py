@@ -1,6 +1,7 @@
 import regex as re
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 from queue import PriorityQueue
+from os import PathLike
 import os
 import json
 import base64
@@ -12,20 +13,22 @@ PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s
 
 class PriorityItem:
     """Wrapper class for priority queue items with custom comparison logic"""
-    def __init__(self, count: int, pair: Tuple[int, int], pair_bytes: Tuple[bytes, bytes]):
+    def __init__(self, count: int, pair: tuple[int, int], pair_bytes: tuple[bytes, bytes]):
         self.count = count
         self.pair = pair
         self.pair_bytes = pair_bytes  # Store byte values for comparison
-    
-    def __lt__(self, other):
+
+    def __lt__(self, other: "PriorityItem") -> bool:
         # For max heap behavior: higher count has higher priority (comes first)
         # When counts are equal, prefer lexicographically greater pair (reverse ordering)
         if self.count != other.count:
             return self.count > other.count  # Reverse for max heap
         # Prefer lexicographically greater pair for tie-breaking
         return self.pair_bytes > other.pair_bytes  # Reverse: greater comes first
-    
-    def __eq__(self, other):
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PriorityItem):
+            return NotImplemented
         return self.count == other.count and self.pair == other.pair
 
 class Word():
@@ -36,29 +39,33 @@ class Word():
         self.count = 1
 
 class BPETrainer():
-    def __init__(self, input_path: str | os.PathLike, vocab_size: int=10000, special_tokens: List[str]=[], num_threads: int | None = None) -> None:
+    def __init__(self, input_path: str | PathLike[str], vocab_size: int=10000, special_tokens: list[str] | None=None, num_threads: int | None = None) -> None:
         self.vocab_size = 256 # number of bytes
         self.target_vocab_size = vocab_size
-        self.special_tokens = special_tokens
-        self.input_path = input_path
-        self.vocab: Dict[int, bytes] = {i: i.to_bytes(1, 'big') for i in range(256)}
-        self.merges: List[Tuple[bytes, bytes]] = []
-        self.loc_map: Dict[Tuple[int, int], List[str]] = {} # maps from adjacent tokens to words that it appears
-        self.word_map: Dict[str, Word] = {} # maps from raw string to Word struct
-        self.num_threads = num_threads if num_threads is not None else min(cpu_count(), 8)
+        self.special_tokens: list[str] = special_tokens if special_tokens is not None else []
+        self.input_path: str | PathLike[str] = input_path
+        self.vocab: dict[int, bytes] = {i: i.to_bytes(1, 'big') for i in range(256)}
+        self.merges: list[tuple[bytes, bytes]] = []
+        self.loc_map: dict[tuple[int, int], list[str]] = {} # maps from adjacent tokens to words that it appears
+        self.word_map: dict[str, Word] = {} # maps from raw string to Word struct
+        self.num_threads: int = num_threads if num_threads is not None else min(cpu_count(), 8)
         # Thread-safety locks for shared data structures
         self._word_map_lock = Lock()
         self._count_map_lock = Lock()
         self._loc_map_lock = Lock()
+        # Initialize data structures that will be populated in preprocess()
+        self.docs: list[str] = []
+        self.count_map: dict[tuple[int, int], int] = {}
+        self.count_queue: PriorityQueue[PriorityItem] = PriorityQueue()
 
-    def _process_document_chunk(self, doc: str) -> Tuple[Dict[str, Word], Dict[Tuple[int, int], int], Dict[Tuple[int, int], List[str]]]:
+    def _process_document_chunk(self, doc: str) -> tuple[dict[str, Word], dict[tuple[int, int], int], dict[tuple[int, int], list[str]]]:
         """
         Process a single document chunk and return local word_map, count_map, and loc_map.
         This function is thread-safe as it only works on local data structures.
         """
-        local_word_map = {}
-        local_count_map = {}
-        local_loc_map = {}
+        local_word_map: dict[str, Word] = {}
+        local_count_map: dict[tuple[int, int], int] = {}
+        local_loc_map: dict[tuple[int, int], list[str]] = {}
         
         words_in_doc = re.findall(PAT, doc)
         for word in words_in_doc:
@@ -118,18 +125,17 @@ class BPETrainer():
         # read corpus
         with open(self.input_path, "r") as f:
             corpus = f.read()
-        
+
         # split on special tokens before preprocess
         if self.special_tokens:
             pattern = "|".join(re.escape(token) for token in self.special_tokens)
-            self.docs: List[str] = [doc for doc in re.split(pattern, corpus) if doc]
+            self.docs = [doc for doc in re.split(pattern, corpus) if doc]
         else:
-            self.docs: List[str] = [corpus]
-        
-        # Initialize data structures
-        self.count_map: Dict[Tuple[int, int], int] = {}
-        self.count_queue: PriorityQueue = PriorityQueue()
-        self.loc_map = {}
+            self.docs = [corpus]
+
+        # Reset data structures
+        self.count_map = {}
+        self.count_queue = PriorityQueue()
 
         # Process documents in parallel using ThreadPoolExecutor
         print(f"Processing {len(self.docs)} documents using {self.num_threads} threads...")
@@ -154,7 +160,7 @@ class BPETrainer():
 
 
     # train is the function to train BPE tokenization to preprocessed corpus
-    def train(self) -> Tuple[Dict[int, bytes], List[Tuple[bytes, bytes]]]:
+    def train(self) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
         """
         Returns:
         vocab: dict[int, bytes] The tokenizer vocabulary, a mapping from int (token ID in the vocabulary) to bytes (token bytes).
@@ -287,7 +293,7 @@ class BPETrainer():
             'target_vocab_size': self.target_vocab_size
         }
     
-    def save(self, output_path: str | os.PathLike):
+    def save(self, output_path: str | PathLike[str]):
         """
         Save the tokenizer to a JSON file.
         
@@ -308,7 +314,7 @@ class BPETrainer():
         print(f"Tokenizer saved to {output_path}")
     
     @classmethod
-    def load(cls, input_path: str | os.PathLike):
+    def load(cls, input_path: str | PathLike[str]):
         """
         Load a tokenizer from a JSON file.
         

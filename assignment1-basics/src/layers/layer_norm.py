@@ -1,20 +1,22 @@
 import torch
 from torch import nn
+from typing import override
 
-# RMSNorm is a layer normalization layer that normalizes the inputs based on their root mean square (RMS) value. 
+# RMSNorm is a layer normalization layer that normalizes the inputs based on their root mean square (RMS) value.
 class RMSNorm(nn.Module):
     # eps: epsilon value for numerical stability
-    def __init__(self, d_model: int, eps: float=1e-5, device=None, dtype=None):
+    def __init__(self, d_model: int, eps: float=1e-5, device: torch.device | None=None, dtype: torch.dtype | None=None):
         super().__init__()
-        self.device = device
-        self.dtype= dtype
-        self.d_model = d_model
-        self.eps = eps
+        self.device: torch.device | None = device
+        self.dtype: torch.dtype | None = dtype
+        self.d_model: int = d_model
+        self.eps: float = eps
         # initialize weights of layer norm to 1
-        self.g = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
-        
+        self.g: nn.Parameter = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
+
 
     # Process an input tensor of shape (batch_size, sequence_length, d_model) and return a tensor of the same shape.
+    @override
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         in_dtype = x.dtype
         x = x.to(torch.float32)

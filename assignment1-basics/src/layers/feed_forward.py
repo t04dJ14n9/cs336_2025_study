@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from einops import einsum
+from typing import override
 
 class FeedForward(nn.Module):
     """
@@ -17,12 +18,12 @@ class FeedForward(nn.Module):
     
     def __init__(self, d_model: int, d_ff: int, device: torch.device | None=None):
         super().__init__()
-        self.w1 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model, device=device)))
-        self.w2 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, d_ff, device=device)))
-        self.w3 = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model, device=device)))
+        self.w1: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model, device=device)))
+        self.w2: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, d_ff, device=device)))
+        self.w3: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model, device=device)))
 
 
-    def _load_weight(self, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor):
+    def _load_weight(self, w1: torch.Tensor, w2: torch.Tensor, w3: torch.Tensor) -> None:
         """Validate that weight matrices have compatible dimensions"""
         d_ff_1, d_model_1 = w1.shape
         d_model_2, d_ff_2 = w2.shape
@@ -63,6 +64,7 @@ class FeedForward(nn.Module):
         
         return output
 
+    @override
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through the feed-forward network using einops.

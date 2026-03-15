@@ -1,5 +1,7 @@
 import os
-from typing import Tuple, Dict, List, Iterable, BinaryIO
+from collections.abc import Iterable
+from typing import BinaryIO
+from os import PathLike
 import regex as re
 import base64
 import json
@@ -31,9 +33,9 @@ def find_chunk_boundaries(
     assert isinstance(split_special_token, bytes), "Must represent special token as a bytestring"
 
     # Get total file size in bytes
-    file.seek(0, os.SEEK_END)
+    _ = file.seek(0, os.SEEK_END)
     file_size = file.tell()
-    file.seek(0)
+    _ = file.seek(0)
 
     chunk_size = file_size // desired_num_chunks
 
@@ -46,7 +48,7 @@ def find_chunk_boundaries(
 
     for bi in range(1, len(chunk_boundaries) - 1):
         initial_position = chunk_boundaries[bi]
-        file.seek(initial_position)  # Start at boundary guess
+        _ = file.seek(initial_position)  # Start at boundary guess
         while True:
             mini_chunk = file.read(mini_chunk_size)  # Read a mini chunk
 
@@ -66,7 +68,7 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def _process_chunk_worker(job_queue: Queue, result_queue: Queue, tokenizer_state: Tuple):
+def _process_chunk_worker(job_queue: Queue[tuple[int, str, int, int] | None], result_queue: Queue[tuple[int, list[list[bytes]]]], tokenizer_state: tuple[dict[int, bytes], list[tuple[bytes, bytes]], list[str] | None]) -> None:
     """
     Worker goroutine (thread) for parallel processing of file chunks.
     Mimics Go's goroutine pattern: reads jobs from a channel (queue),
@@ -93,20 +95,20 @@ def _process_chunk_worker(job_queue: Queue, result_queue: Queue, tokenizer_state
         try:
             # Read the chunk
             with open(file_path, 'rb') as f:
-                f.seek(start)
+                _ = f.seek(start)
                 chunk = f.read(end - start).decode('utf-8', errors='ignore')
             
             # Pre-tokenize the chunk
             result = tokenizer.pre_tokenize(chunk)
             result_queue.put((job_id, result))
-        except Exception as e:
+        except Exception:
             # Send error result
-            result_queue.put((job_id, None, str(e)))
+            result_queue.put((job_id, [[]]))  # Empty result on error
         finally:
             job_queue.task_done()
 
 
-def _process_text_chunk_worker(job_queue: Queue, result_queue: Queue, tokenizer_state: Tuple):
+def _process_text_chunk_worker(job_queue: Queue[tuple[int, str] | None], result_queue: Queue[tuple[int, list[list[bytes]]]], tokenizer_state: tuple[dict[int, bytes], list[tuple[bytes, bytes]], list[str] | None]) -> None:
     """
     Worker goroutine (thread) for parallel processing of text chunks.
     Mimics Go's goroutine pattern with channels (queues).
@@ -133,67 +135,68 @@ def _process_text_chunk_worker(job_queue: Queue, result_queue: Queue, tokenizer_
             # Pre-tokenize the chunk
             result = tokenizer.pre_tokenize(text_chunk)
             result_queue.put((job_id, result))
-        except Exception as e:
+        except Exception:
             # Send error result
-            result_queue.put((job_id, None, str(e)))
+            result_queue.put((job_id, [[]]))  # Empty result on error
         finally:
             job_queue.task_done()
 
 
 class BPETokenizer:
-    def __init__(self, vocab: Dict[int, bytes]={}, merges: List[Tuple[bytes, bytes]]=[], special_tokens: List[str]|None=None):
-        self.vocab = vocab
-        self.merges = merges
-        self.special_tokens = special_tokens
-        self.vocab_size = len(vocab)
+    def __init__(self, vocab: dict[int, bytes] | None=None, merges: list[tuple[bytes, bytes]] | None=None, special_tokens: list[str] | None=None):
+        self.vocab: dict[int, bytes] = vocab if vocab is not None else {}
+        self.merges: list[tuple[bytes, bytes]] = merges if merges is not None else []
+        self.special_tokens: list[str] | None = special_tokens
+        self.vocab_size: int = len(self.vocab)
         if special_tokens is not None and len(special_tokens) > 0:
             for special_token in special_tokens:
                 # print(special_token)
-                if special_token.encode("utf-8") not in vocab.values():
+                if special_token.encode("utf-8") not in self.vocab.values():
                     self.vocab[self.vocab_size] = special_token.encode("utf-8")
                     self.vocab_size += 1
 
-        self.token_to_id: Dict[bytes, int] = {v: k for k, v in vocab.items()}
-        
+        self.token_to_id: dict[bytes, int] = {v: k for k, v in self.vocab.items()}
+
         # Build merge priority map for efficient lookup
         # Lower priority value means the merge should be applied earlier
-        self.merge_priority: Dict[Tuple[bytes, bytes], int] = {
-            merge: idx for idx, merge in enumerate(merges)
+        self.merge_priority: dict[tuple[bytes, bytes], int] = {
+            merge: idx for idx, merge in enumerate(self.merges)
         }
 
         
-    def pre_tokenize(self, text: str) -> List[List[bytes]]:
+    def pre_tokenize(self, text: str) -> list[list[bytes]]:
         """
         pre_tokenize convert text to list of strings, which is a list of UTF-8 bytes
         """
         # split on special tokens before preprocess
+        docs: list[str]
         if self.special_tokens:
             # Sort special tokens by length (longest first) to handle overlapping tokens correctly
             # this makes sure longer special tokens are matched before shorter ones.
             # also notice that capturing group are used, so the special tokens are captured as groups.
-            # example: 
+            # example:
             # With capturing group:
-            # re.split("(<|endoftext|>)", "Hello <|endoftext|> World") 
-            # Returns: ["Hello ", "<|endoftext|>", " World"]  # Special token preserved! 
+            # re.split("(<|endoftext|>)", "Hello <|endoftext|> World")
+            # Returns: ["Hello ", "<|endoftext|>", " World"]  # Special token preserved!
             special_tokens_sorted = sorted(self.special_tokens, key=len, reverse=True)
             pattern = "(" + "|".join(re.escape(token) for token in special_tokens_sorted) + ")"
-            docs: List[str] = [doc for doc in re.split(pattern, text) if doc]
+            docs = [doc for doc in re.split(pattern, text) if doc]
         else:
-            docs: List[str] = [text]
-        
-        process_text = []
-        special_tokens_set = set(self.special_tokens) if self.special_tokens else set()
-        
+            docs = [text]
+
+        process_text: list[list[bytes]] = []
+        special_tokens_set: set[str] = set(self.special_tokens) if self.special_tokens else set()
+
         for doc in docs:
             # since capturing group is used, the special tokens are captured as groups.
             # requires atomic treatment to handle special tokens
             if doc in special_tokens_set:
                 # This is a special token, treat it as a single token
-                byte_list = [doc.encode('utf-8')]
+                byte_list: list[bytes] = [doc.encode('utf-8')]
                 process_text.append(byte_list)
             else:
                 # Regular text, apply pre-tokenization pattern
-                words_in_doc = re.findall(PAT, doc)
+                words_in_doc: list[str] = re.findall(PAT, doc)
                 for word in words_in_doc:
                     byte_list = []
                     # byte_value is the integer value for the byte
@@ -209,7 +212,7 @@ class BPETokenizer:
         num_processes: int | None = None,
         split_special_token: str = "<|endoftext|>",
         min_chunk_size: int = 10000
-    ) -> List[List[bytes]]:
+    ) -> list[list[bytes]]:
         """
         Pre-tokenize text using parallel processing.
         The text is split into chunks at special token boundaries, and each chunk
@@ -234,23 +237,23 @@ class BPETokenizer:
         # Use regex to split while preserving the special token
         # This creates a pattern that captures the special token
         pattern = f"({re.escape(split_special_token)})"
-        parts = re.split(pattern, text)
-        
+        parts: list[str] = re.split(pattern, text)
+
         # Reconstruct chunks with special tokens
-        chunks = []
+        chunks: list[str] = []
         for i in range(0, len(parts)):
             if parts[i]:  # Skip empty strings
                 chunks.append(parts[i])
-        
+
         # Calculate approximate chunk size
-        total_chars = sum(len(chunk) for chunk in chunks)
-        target_chunk_size = total_chars // num_processes
-        
+        total_chars: int = sum(len(chunk) for chunk in chunks)
+        target_chunk_size: int = total_chars // num_processes
+
         # Group chunks to achieve target size while preserving special tokens
-        grouped_chunks = []
-        current_group = []
-        current_size = 0
-        
+        grouped_chunks: list[str] = []
+        current_group: list[str] = []
+        current_size: int = 0
+
         for chunk in chunks:
             current_group.append(chunk)
             current_size += len(chunk)
@@ -270,11 +273,11 @@ class BPETokenizer:
             return self.pre_tokenize(text)
         
         # Go-style concurrency: Create channels (queues) for communication
-        job_queue = Queue()
-        result_queue = Queue()
+        job_queue: Queue[tuple[int, str] | None] = Queue()
+        result_queue: Queue[tuple[int, list[list[bytes]]]] = Queue()
         
         # Prepare tokenizer state for workers
-        tokenizer_state = (self.vocab, self.merges, self.special_tokens)
+        tokenizer_state: tuple[dict[int, bytes], list[tuple[bytes, bytes]], list[str] | None] = (self.vocab, self.merges, self.special_tokens)
         
         # Launch goroutines (threads) - similar to Go's "go func()"
         num_workers = min(num_processes, len(grouped_chunks))
@@ -298,23 +301,24 @@ class BPETokenizer:
         
         # Collect results from the result channel (queue)
         # Store results with their job_id to maintain order
-        results = {}
+        results: dict[int, list[list[bytes]]] = {}
         for _ in range(len(grouped_chunks)):
-            job_id, result = result_queue.get()
+            job_id_result: tuple[int, list[list[bytes]]] = result_queue.get()
+            job_id, result = job_id_result
             results[job_id] = result
-        
+
         # Wait for all goroutines to finish
         for worker in workers:
             worker.join()
-        
+
         # Flatten results in order
-        all_pre_tokens = []
+        all_pre_tokens: list[list[bytes]] = []
         for job_id in sorted(results.keys()):
             all_pre_tokens.extend(results[job_id])
-        
+
         return all_pre_tokens
     
-    def encode(self, text: str, use_parallel: bool = False, num_processes: int = 0) -> List[int]:
+    def encode(self, text: str, use_parallel: bool = False, num_processes: int = 0) -> list[int]:
         """
         encode convert text to list of token IDs
         
@@ -326,15 +330,16 @@ class BPETokenizer:
         Returns:
             List of token IDs
         """
-        token_ids = []
-        
+        token_ids: list[int] = []
+
         # Use parallel or sequential pre-tokenization
+        process_text: list[list[bytes]]
         if use_parallel:
             process_text = self.pre_tokenize_parallel(text, num_processes=num_processes)
         else:
             process_text = self.pre_tokenize(text)
 
-        print(f'{time.time()}: Pre-tokenization completed')
+        _ = print(f'{time.time()}: Pre-tokenization completed')
         
         # Apply merges efficiently using priority-based approach
         for i in range(len(process_text)):
@@ -348,7 +353,7 @@ class BPETokenizer:
                 token_ids.append(self.token_to_id[token])
         return token_ids
                 
-    def _encode_word(self, word: List[bytes], attempted_merge: Tuple[bytes, bytes]) -> List[bytes]:
+    def _encode_word(self, word: list[bytes], attempted_merge: tuple[bytes, bytes]) -> list[bytes]:
         if len(word) <= 1:
             return word
             
@@ -366,7 +371,7 @@ class BPETokenizer:
                 i += 1
         return new_word
     
-    def _encode_word_optimized(self, word: List[bytes]) -> List[bytes]:
+    def _encode_word_optimized(self, word: list[bytes]) -> list[bytes]:
         """
         Optimized word encoding using priority-based merging.
         Instead of iterating through all merges, we find possible merges
@@ -374,30 +379,30 @@ class BPETokenizer:
         """
         if len(word) <= 1:
             return word
-        
+
         # Keep merging until no more merges are possible
         while len(word) > 1:
             # Find all possible merge pairs in the current word with their priorities
-            possible_merges = {}
+            possible_merges: dict[tuple[bytes, bytes], tuple[int, int]] = {}
             for i in range(len(word) - 1):
-                pair = (word[i], word[i+1])
+                pair: tuple[bytes, bytes] = (word[i], word[i+1])
                 if pair in self.merge_priority:
                     priority = self.merge_priority[pair]
                     # Store the position with the lowest priority (earliest merge)
                     if pair not in possible_merges or priority < possible_merges[pair][0]:
                         possible_merges[pair] = (priority, i)
-            
+
             # If no merges are possible, we're done
             if not possible_merges:
                 break
-            
+
             # Find the merge with the highest priority (lowest priority value)
             best_pair = min(possible_merges.items(), key=lambda x: x[1][0])
             merge_pair = best_pair[0]
             merge_pos = best_pair[1][1]
-            
+
             # Apply the best merge at its position
-            new_word = []
+            new_word: list[bytes] = []
             i = 0
             while i < len(word):
                 if i == merge_pos:
@@ -407,9 +412,9 @@ class BPETokenizer:
                 else:
                     new_word.append(word[i])
                     i += 1
-            
+
             word = new_word
-        
+
         return word
     
     def encode_iterable(self, iterable: Iterable[str]) -> Iterable[int]:
@@ -418,16 +423,16 @@ class BPETokenizer:
         This is required for memory-efficient tokenization of large files that we cannot directly load into memory.
         """
         for text in iterable:
-            token_ids = self.encode(text)
+            token_ids: list[int] = self.encode(text)
             for token_id in token_ids:
                 yield token_id
     
     def pre_tokenize_file_parallel(
-        self, 
-        file_path: str | os.PathLike, 
+        self,
+        file_path: str | PathLike[str],
         num_processes: int | None = None,
         split_special_token: str = "<|endoftext|>"
-    ) -> List[List[bytes]]:
+    ) -> list[list[bytes]]:
         """
         Pre-tokenize a large file using parallel processing.
         The file is split into chunks at special token boundaries, and each chunk
@@ -453,19 +458,19 @@ class BPETokenizer:
             boundaries = find_chunk_boundaries(f, num_processes, split_special_token.encode('utf-8'))
         
         # Go-style concurrency: Create channels (queues) for communication
-        job_queue = Queue()
-        result_queue = Queue()
-        
+        job_queue: Queue[tuple[int, str, int, int] | None] = Queue()
+        result_queue: Queue[tuple[int, list[list[bytes]]]] = Queue()
+
         # Prepare tokenizer state for workers
-        tokenizer_state = (self.vocab, self.merges, self.special_tokens)
-        
+        tokenizer_state: tuple[dict[int, bytes], list[tuple[bytes, bytes]], list[str] | None] = (self.vocab, self.merges, self.special_tokens)
+
         # Calculate number of chunks
-        chunks = list(zip(boundaries[:-1], boundaries[1:]))
+        chunks: list[tuple[int, int]] = list(zip(boundaries[:-1], boundaries[1:]))
         num_chunks = len(chunks)
-        
+
         # Launch goroutines (threads) - similar to Go's "go func()"
         num_workers = min(num_processes, num_chunks)
-        workers = []
+        workers: list[Thread] = []
         for _ in range(num_workers):
             worker = Thread(
                 target=_process_chunk_worker,
@@ -477,7 +482,9 @@ class BPETokenizer:
         
         # Send jobs to the job channel (queue)
         for job_id, (start, end) in enumerate(chunks):
-            job_queue.put((job_id, file_path, start, end))
+            # Convert file_path to str if it's PathLike
+            job_path: str = str(file_path)
+            job_queue.put((job_id, job_path, start, end))
         
         # Send sentinel values to stop workers (like closing a channel in Go)
         for _ in range(num_workers):
@@ -485,28 +492,29 @@ class BPETokenizer:
         
         # Collect results from the result channel (queue)
         # Store results with their job_id to maintain order
-        results = {}
+        results: dict[int, list[list[bytes]]] = {}
         for _ in range(num_chunks):
-            job_id, result = result_queue.get()
+            job_id_result: tuple[int, list[list[bytes]]] = result_queue.get()
+            job_id, result = job_id_result
             results[job_id] = result
-        
+
         # Wait for all goroutines to finish
         for worker in workers:
             worker.join()
-        
+
         # Flatten results in order
-        all_pre_tokens = []
+        all_pre_tokens: list[list[bytes]] = []
         for job_id in sorted(results.keys()):
             all_pre_tokens.extend(results[job_id])
-        
+
         return all_pre_tokens
-    
+
     def encode_file_parallel(
         self,
-        file_path: str | os.PathLike,
+        file_path: str | PathLike[str],
         num_processes: int | None = None,
         split_special_token: str = "<|endoftext|>"
-    ) -> List[int]:
+    ) -> list[int]:
         """
         Encode a large file using parallel pre-tokenization.
         
@@ -523,25 +531,25 @@ class BPETokenizer:
             token_ids = tokenizer.encode_file_parallel('large_file.txt', num_processes=4)
         """
         # Pre-tokenize in parallel
-        process_text = self.pre_tokenize_file_parallel(file_path, num_processes, split_special_token)
-        
+        process_text: list[list[bytes]] = self.pre_tokenize_file_parallel(file_path, num_processes, split_special_token)
+
         # Apply merges (this part is still sequential, but pre-tokenization is the bottleneck)
         for i in range(len(process_text)):
             process_text[i] = self._encode_word_optimized(process_text[i])
-        
+
         # Convert to token IDs
-        token_ids = []
+        token_ids: list[int] = []
         for word in process_text:
             for token in word:
                 token_ids.append(self.token_to_id[token])
-        
+
         return token_ids
                 
-    def decode(self, IDs: List[int]) -> str:
+    def decode(self, IDs: list[int]) -> str:
         """
         decode converts list of token IDs back to the original text
-        """        
-        byte_list = []
+        """
+        byte_list: list[bytes] = []
         for ID in IDs:
             byte_list.append(self.vocab[ID])
         return b''.join(byte_list).decode('utf-8', errors='replace')
@@ -549,47 +557,55 @@ class BPETokenizer:
 
                 
     @classmethod
-    def load(cls, input_path: str | os.PathLike):
+    def load(cls, input_path: str | PathLike[str]) -> "BPETokenizer":
         """
         Load a tokenizer from a JSON file.
-        
+
         Args:
             input_path: Path to the saved tokenizer file
-            
+
         Returns:
             BPE: A BPE tokenizer instance with loaded vocabulary and merges
-            
+
         Example:
             bpe = BPE.load('my_tokenizer.json')
             # Now you can use bpe.encode() or bpe.decode()
         """
         with open(input_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
+            data: dict[str, object] = json.load(f)
+
         # Create a new BPE instance (dummy input_path since we're loading)
         tokenizer = cls()
-        
+
         # Restore vocab: convert base64 strings back to bytes
+        vocab_data = data.get('vocab', {})
+        assert isinstance(vocab_data, dict)
         tokenizer.vocab = {
             int(k): base64.b64decode(v.encode('utf-8'))
-            for k, v in data['vocab'].items()
+            for k, v in vocab_data.items()
         }
-        
+
         # Restore merges: convert base64 strings back to bytes tuples
+        merges_data = data.get('merges', [])
+        assert isinstance(merges_data, list)
         tokenizer.merges = [
             (base64.b64decode(t1.encode('utf-8')), base64.b64decode(t2.encode('utf-8')))
-            for t1, t2 in data['merges']
+            for t1, t2 in merges_data
         ]
-        
+
         # Restore other attributes
-        tokenizer.special_tokens = data.get('special_tokens', [])
-        tokenizer.vocab_size = data.get('vocab_size', 256)
+        special_tokens_data = data.get('special_tokens', [])
+        assert isinstance(special_tokens_data, list)
+        tokenizer.special_tokens = special_tokens_data
+        vocab_size_data = data.get('vocab_size', 256)
+        assert isinstance(vocab_size_data, int)
+        tokenizer.vocab_size = vocab_size_data
         tokenizer.token_to_id = {v: k for k, v in tokenizer.vocab.items()}
-        
+
         # Rebuild merge priority map for efficient lookup
         tokenizer.merge_priority = {
             merge: idx for idx, merge in enumerate(tokenizer.merges)
         }
 
-        print(f"Tokenizer loaded from {input_path}")
+        _ = print(f"Tokenizer loaded from {input_path}")
         return tokenizer

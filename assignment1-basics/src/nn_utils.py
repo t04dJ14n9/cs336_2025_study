@@ -1,10 +1,10 @@
 """Neural network utility functions: SiLU, cross-entropy, gradient clipping, get_batch."""
 
-import math
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch import Tensor
+from collections.abc import Iterable
 
 
 def silu(x: Tensor) -> Tensor:
@@ -27,31 +27,35 @@ def cross_entropy(
     return loss.mean()
 
 
-def gradient_clipping(parameters, max_l2_norm: float) -> None:
+def gradient_clipping(parameters: Iterable[Tensor], max_l2_norm: float) -> None:
     """Clip combined gradient L2 norm to max_l2_norm, in-place."""
     # Collect parameters that have gradients
-    params_with_grad = [p for p in parameters if p.grad is not None]
+    params_with_grad: list[Tensor] = [p for p in parameters if p.grad is not None]
     if len(params_with_grad) == 0:
         return
 
     # Compute total L2 norm of all gradients
     # Initialize with tensor to ensure type consistency
-    total_norm_sq = torch.tensor(0.0, device=params_with_grad[0].device)
+    total_norm_sq: Tensor = torch.tensor(0.0, device=params_with_grad[0].device)
     for p in params_with_grad:
-        total_norm_sq += (p.grad.detach().float() ** 2).sum()
-    
+        grad = p.grad
+        assert grad is not None
+        total_norm_sq += (grad.detach().float() ** 2).sum()
+
     # Compute total norm
-    total_norm = total_norm_sq.sqrt()
+    total_norm: Tensor = total_norm_sq.sqrt()
 
     # Clip factor
-    clip_coef = max_l2_norm / (total_norm + 1e-6)
+    clip_coef: Tensor = max_l2_norm / (total_norm + 1e-6)
     if clip_coef < 1.0:
         for p in params_with_grad:
-            p.grad.detach().mul_(clip_coef)
+            grad = p.grad
+            assert grad is not None
+            grad.detach().mul_(clip_coef)
 
 
 def get_batch(
-    dataset: npt.NDArray,
+    dataset: npt.NDArray[np.int64],
     batch_size: int,
     context_length: int,
     device: str,
@@ -63,6 +67,6 @@ def get_batch(
     x = np.stack([dataset[i : i + context_length] for i in start_indices])
     y = np.stack([dataset[i + 1 : i + 1 + context_length] for i in start_indices])
 
-    x = torch.tensor(x, dtype=torch.long, device=device)
-    y = torch.tensor(y, dtype=torch.long, device=device)
-    return x, y
+    x_tensor = torch.tensor(x, dtype=torch.long, device=device)
+    y_tensor = torch.tensor(y, dtype=torch.long, device=device)
+    return x_tensor, y_tensor

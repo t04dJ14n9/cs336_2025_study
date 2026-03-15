@@ -3,7 +3,9 @@ from torch import nn
 from einops import rearrange, einsum
 import math
 from jaxtyping import Float, Bool, Int
-from . import softmax, RoPE
+from typing import override
+from .softmax import softmax
+from .positional_encoding import RoPE
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None, pos_encoding: bool=False, theta: float=0, max_seq_len: int=1024): 
@@ -14,22 +16,23 @@ class MultiHeadAttention(nn.Module):
             num_heads: The number of heads.
         """
         super().__init__()
-        self.h = num_heads
-        self.d_k = d_model // num_heads
-        self.d_v = d_model // num_heads
+        self.h: int = num_heads
+        self.d_k: int = d_model // num_heads
+        self.d_v: int = d_model // num_heads
 
         # initialize projection weights
-        self.w_q = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model, device=device)))
-        self.w_k = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model, device=device)))
-        self.w_v = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_v, d_model, device=device)))
-        self.w_o = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, num_heads * self.d_v, device=device)))
+        self.w_q: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model, device=device)))
+        self.w_k: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_k, d_model, device=device)))
+        self.w_v: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(num_heads * self.d_v, d_model, device=device)))
+        self.w_o: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, num_heads * self.d_v, device=device)))
         
         # initialize positional encoding
-        self.RoPE = None
+        self.RoPE: RoPE | None = None
         if pos_encoding:
             self.RoPE = RoPE(theta, self.d_k, max_seq_len=max_seq_len, device=device)
         
 
+    @override
     def forward(self, 
         Q: Float[torch.Tensor, "... seq_len d_model"],
         K: Float[torch.Tensor, "... seq_len d_model"],

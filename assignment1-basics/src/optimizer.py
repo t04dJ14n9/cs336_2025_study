@@ -1,68 +1,79 @@
 """AdamW optimizer and cosine learning rate schedule."""
 
 import math
+from typing import Callable, Iterable
+from collections.abc import Iterable as AbcIterable
 import torch
+from torch import Tensor
 from torch.optim import Optimizer
 
 
 class AdamW(Optimizer):
     """AdamW optimizer with decoupled weight decay."""
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
+    def __init__(self, params: AbcIterable[Tensor], lr: float=1e-3, betas: tuple[float, float]=(0.9, 0.999), eps: float=1e-8, weight_decay: float=0.01):
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         super().__init__(params, defaults)
 
     @torch.no_grad()
-    def step(self, closure=None):  # type: ignore[override]
+    def step(self, closure: Callable[[], float] | None=None) -> float | None:  # type: ignore[override, reportIncompatibleMethodOverride]
         """Perform a single optimization step.
-        
+
         Args:
             closure: A closure that reevaluates the model and returns the loss.
-        
+
         Returns:
             The loss value if closure is provided, None otherwise.
             Note: PyTorch's base Optimizer.step() returns None, but many
             optimizers (including AdamW) return Optional[float] for closure support.
         """
-        loss = None
+        loss: float | None = None
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
 
         for group in self.param_groups:
-            lr = group["lr"]
+            lr: float = group["lr"]
+            beta1: float
+            beta2: float
             beta1, beta2 = group["betas"]
-            eps = group["eps"]
-            weight_decay = group["weight_decay"]
+            eps: float = group["eps"]
+            weight_decay: float = group["weight_decay"]
 
             for p in group["params"]:
                 if p.grad is None:
                     continue
 
-                grad = p.grad
+                grad: Tensor = p.grad
 
-                state = self.state[p]
+                state: dict[str, Tensor | int] = self.state[p]
                 if len(state) == 0:
                     state["step"] = 0
                     state["exp_avg"] = torch.zeros_like(p)
                     state["exp_avg_sq"] = torch.zeros_like(p)
 
-                state["step"] += 1
-                t = state["step"]
+                step: int = int(state["step"]) + 1
+                state["step"] = step
+                t: int = step
+
+                exp_avg = state["exp_avg"]
+                exp_avg_sq = state["exp_avg_sq"]
+                assert isinstance(exp_avg, Tensor)
+                assert isinstance(exp_avg_sq, Tensor)
 
                 # Update biased first and second moment estimates
-                state["exp_avg"].mul_(beta1).add_(grad, alpha=1 - beta1)
-                state["exp_avg_sq"].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
                 # Bias correction
-                bias_correction1 = 1 - beta1 ** t
-                bias_correction2 = 1 - beta2 ** t
+                bias_correction1: float = 1 - beta1 ** t
+                bias_correction2: float = 1 - beta2 ** t
 
-                step_size = lr / bias_correction1
-                denom = (state["exp_avg_sq"].sqrt() / math.sqrt(bias_correction2)).add_(eps)
+                step_size: float = lr / bias_correction1
+                denom: Tensor = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(eps)
 
                 # Parameter update (Adam part)
-                p.addcdiv_(state["exp_avg"], denom, value=-step_size)
+                p.addcdiv_(exp_avg, denom, value=-step_size)
 
                 # Decoupled weight decay
                 if weight_decay != 0:
