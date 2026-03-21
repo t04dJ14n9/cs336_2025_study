@@ -6,7 +6,7 @@ This demonstrates how to use the parallel pre-tokenization feature
 within the encode() method to speed up encoding of large texts.
 """
 
-from bpe_tokenizer import BPETokenizer
+from src.tokenization.bpe_tokenizer import BPETokenizer
 import time
 
 

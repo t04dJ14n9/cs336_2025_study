@@ -51,7 +51,7 @@ def gradient_clipping(parameters: Iterable[Tensor], max_l2_norm: float) -> None:
         for p in params_with_grad:
             grad = p.grad
             assert grad is not None
-            grad.detach().mul_(clip_coef)
+            _ = grad.detach().mul_(clip_coef)  # type: ignore
 
 
 def get_batch(
@@ -64,8 +64,8 @@ def get_batch(
     max_start = len(dataset) - context_length
     start_indices = np.random.randint(0, max_start, size=(batch_size,))
 
-    x = np.stack([dataset[i : i + context_length] for i in start_indices])
-    y = np.stack([dataset[i + 1 : i + 1 + context_length] for i in start_indices])
+    x = np.stack([dataset[int(i) : int(i) + context_length] for i in start_indices])  # type: ignore
+    y = np.stack([dataset[int(i) + 1 : int(i) + 1 + context_length] for i in start_indices])  # type: ignore
 
     x_tensor = torch.tensor(x, dtype=torch.long, device=device)
     y_tensor = torch.tensor(y, dtype=torch.long, device=device)

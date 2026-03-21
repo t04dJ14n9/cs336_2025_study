@@ -3,12 +3,12 @@ from torch import nn
 from einops import rearrange, einsum
 import math
 from jaxtyping import Float, Bool, Int
-from typing import override
+from typing_extensions import override
 from .softmax import softmax
 from .positional_encoding import RoPE
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None, pos_encoding: bool=False, theta: float=0, max_seq_len: int=1024): 
+    def __init__(self, d_model: int, num_heads: int, device: torch.device | None=None, pos_encoding: bool=False, theta: float=0, max_seq_len: int=1024) -> None: 
         """
         Initialize the multi-head attention layer.
         Args:

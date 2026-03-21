@@ -19,11 +19,13 @@ config = {
     }
 }
 
-def main():
+def main() -> None:
     for name in config:
         print(f"name: {name}")
         # load weights
-        bpe_tokenizer = BPETokenizer.load(config[name]["weight_path"])
+        cfg: dict[str, str | list[str]] = config[name]  # type: ignore
+        weight_path = str(cfg["weight_path"])
+        bpe_tokenizer = BPETokenizer.load(weight_path)
 
         # load corpus and encode
         for data_path in config[name]["data_path"]:

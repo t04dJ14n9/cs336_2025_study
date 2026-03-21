@@ -24,6 +24,7 @@ import argparse
 import os
 import sys
 import time
+from typing import TypedDict
 
 import numpy as np
 
@@ -37,7 +38,15 @@ from src.tokenization.bpe_tokenizer import BPETokenizer
 # Dataset configs
 # ──────────────────────────────────────────────────────────────────────────────
 
-DATASET_CONFIGS = {
+class DatasetConfig(TypedDict):
+    tokenizer_path: str
+    train_file: str
+    valid_file: str
+    default_vocab_size: int
+    special_tokens: list[str]
+
+
+DATASET_CONFIGS: dict[str, DatasetConfig] = {
     "tiny_stories": {
         "tokenizer_path": "src/tokenization/saved_bpe_tiny_story_train.json",
         "train_file": "TinyStoriesV2-GPT4-train.txt",

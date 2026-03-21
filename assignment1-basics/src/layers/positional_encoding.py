@@ -3,7 +3,7 @@ from torch import nn
 from einops import einsum
 import math
 from jaxtyping import Float, Int
-from typing import override
+from typing_extensions import override
 
 class RoPE(nn.Module):
     """Rotary Positional Embedding (RoPE) module.
@@ -14,7 +14,7 @@ class RoPE(nn.Module):
         max_seq_len (int): Maximum sequence length for positional embeddings.
         device (torch.device, optional): Device to store the embeddings on. Defaults to None.
     """
-    def __init__(self, theta: float, d_k: int, max_seq_len: int=1024, device: torch.device|None=None):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int=1024, device: torch.device|None=None) -> None:
         super().__init__()
         self.theta: float = theta
         self.d_k: int = d_k
@@ -33,12 +33,13 @@ class RoPE(nn.Module):
             # k denote the index of the 2 by 2 matrix on the diagonal
             for k in range(self.d_k//2):
                 theta_i_k: float = i / (self.theta ** (2 * k / self.d_k))
-                mat_list.append(torch.tensor([
+                rotation: torch.Tensor = torch.tensor([
                     [math.cos(theta_i_k), -math.sin(theta_i_k)],
                     [math.sin(theta_i_k), math.cos(theta_i_k)],
-                ], device=self.device))
+                ], device=self.device)
+                mat_list.append(rotation)
             # Create block diagonal matrix
-            rot_mats[i] = torch.block_diag(*mat_list) # the usage of '*' unpacks the list, similar to ... in Golang
+            rot_mats[i] = torch.block_diag(*mat_list)  # pyright: ignore[reportUnknownMemberType]
         return rot_mats
 
     @override

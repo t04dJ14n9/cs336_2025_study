@@ -1,11 +1,11 @@
 import torch
 from torch import nn
-from typing import override
+from typing_extensions import override
 
 # RMSNorm is a layer normalization layer that normalizes the inputs based on their root mean square (RMS) value.
 class RMSNorm(nn.Module):
     # eps: epsilon value for numerical stability
-    def __init__(self, d_model: int, eps: float=1e-5, device: torch.device | None=None, dtype: torch.dtype | None=None):
+    def __init__(self, d_model: int, eps: float=1e-5, device: torch.device | None=None, dtype: torch.dtype | None=None) -> None:
         super().__init__()
         self.device: torch.device | None = device
         self.dtype: torch.dtype | None = dtype

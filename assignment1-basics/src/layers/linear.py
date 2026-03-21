@@ -2,7 +2,7 @@ import math
 import torch
 from torch import nn
 from einops import einsum
-from typing import override
+from typing_extensions import override
 
 class Linear(nn.Module):
     """
@@ -23,7 +23,7 @@ class Linear(nn.Module):
         >>> output = linear(x)       # shape: (32, 5)
     """
 
-    def __init__(self, in_features: int, out_features: int, device: torch.device | None=None, dtype: torch.dtype | None=None, bias: bool=False):
+    def __init__(self, in_features: int, out_features: int, device: torch.device | None=None, dtype: torch.dtype | None=None, bias: bool=False) -> None:
         super().__init__()
         # Create weight parameter and initialize it
         self.weights: nn.Parameter = nn.Parameter(torch.zeros(out_features, in_features, device=device, dtype=dtype))

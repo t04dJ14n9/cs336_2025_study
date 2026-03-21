@@ -1,8 +1,9 @@
 """AdamW optimizer and cosine learning rate schedule."""
 
 import math
-from typing import Callable, Iterable
-from collections.abc import Iterable as AbcIterable
+from collections.abc import Iterable
+from typing import Callable
+
 import torch
 from torch import Tensor
 from torch.optim import Optimizer
@@ -11,12 +12,12 @@ from torch.optim import Optimizer
 class AdamW(Optimizer):
     """AdamW optimizer with decoupled weight decay."""
 
-    def __init__(self, params: AbcIterable[Tensor], lr: float=1e-3, betas: tuple[float, float]=(0.9, 0.999), eps: float=1e-8, weight_decay: float=0.01):
+    def __init__(self, params: Iterable[Tensor], lr: float=1e-3, betas: tuple[float, float]=(0.9, 0.999), eps: float=1e-8, weight_decay: float=0.01) -> None:
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         super().__init__(params, defaults)
 
-    @torch.no_grad()
-    def step(self, closure: Callable[[], float] | None=None) -> float | None:  # type: ignore[override, reportIncompatibleMethodOverride]
+    @torch.no_grad()  # pyright: ignore[reportUntypedFunctionDecorator]
+    def step(self, closure: Callable[[], float] | None=None) -> float | None:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Perform a single optimization step.
 
         Args:

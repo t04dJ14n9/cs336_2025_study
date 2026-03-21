@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from einops import einsum
-from typing import override
+from typing_extensions import override
 
 class FeedForward(nn.Module):
     """
@@ -16,7 +16,7 @@ class FeedForward(nn.Module):
         w3: Gate projection weight matrix [d_ff, d_model]
     """
     
-    def __init__(self, d_model: int, d_ff: int, device: torch.device | None=None):
+    def __init__(self, d_model: int, d_ff: int, device: torch.device | None=None) -> None:
         super().__init__()
         self.w1: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_ff, d_model, device=device)))
         self.w2: nn.Parameter = nn.Parameter(nn.init.trunc_normal_(torch.rand(d_model, d_ff, device=device)))

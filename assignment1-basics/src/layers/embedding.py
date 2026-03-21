@@ -1,9 +1,9 @@
 from torch import nn
 import torch
-from typing import override
+from typing_extensions import override
 
 class Embedding(nn.Module):
-    def __init__(self, num_embeddings: int, embedding_dim: int, device: torch.device | None=None, dtype: torch.dtype | None=None):
+    def __init__(self, num_embeddings: int, embedding_dim: int, device: torch.device | None=None, dtype: torch.dtype | None=None) -> None:
         super().__init__()
         self.weights: nn.Parameter = nn.Parameter(torch.nn.init.trunc_normal_(
             torch.zeros(num_embeddings, embedding_dim, device=device, dtype=dtype), 

@@ -9,6 +9,7 @@ import sys
 import time
 
 import numpy as np
+import numpy.typing as npt
 import torch
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -19,19 +20,19 @@ from src.nn_utils import cross_entropy, gradient_clipping, get_batch  # pyright:
 from src.optimizer import AdamW
 
 
-def create_tiny_dataset(vocab_size: int, num_docs: int = 100, doc_len: int = 50):
+def create_tiny_dataset(vocab_size: int, num_docs: int = 100, doc_len: int = 50) -> npt.NDArray[np.int64]:
     """Create a tiny synthetic dataset for quick testing."""
     print(f"Creating synthetic dataset: {num_docs} docs × {doc_len} tokens")
     # Generate random token sequences (simple language model task)
-    tokens = []
+    tokens: list[int] = []
     for _ in range(num_docs):
         # Each "document" is a random sequence
         doc = np.random.randint(0, vocab_size, size=doc_len)
         tokens.extend(doc.tolist())
-    
-    tokens = np.array(tokens, dtype=np.uint16)
-    print(f"Total tokens: {len(tokens):,}")
-    return tokens
+
+    result = np.array(tokens, dtype=np.int64)
+    print(f"Total tokens: {len(result):,}")
+    return result
 
 
 def verify_model_training():
@@ -137,8 +138,8 @@ def verify_model_training():
             print(f"Iter {iter:4d} | Loss: {loss.item():.4f} | Avg: {avg_loss:.4f} | Time: {elapsed*1000:.1f}ms")
     
     # Verify loss decreased
-    initial_loss = np.mean(losses[:10])
-    final_loss = np.mean(losses[-10:])
+    initial_loss = float(np.mean(losses[:10]))  # type: ignore
+    final_loss = float(np.mean(losses[-10:]))  # type: ignore
     
     print("\n" + "="*80)
     print("VERIFICATION RESULTS")
@@ -164,22 +165,25 @@ def verify_model_training():
     with torch.no_grad():
         for _ in range(20):
             # Get last context_length tokens
-            context = prompt[:, -config["context_length"]:]
-            logits = model(context)
+            ctx_len = int(config["context_length"])  # type: ignore
+            context = prompt[:, -ctx_len:]
+            logits: torch.Tensor = model(context)
             logits = logits[:, -1, :]  # Last position
             probs = torch.softmax(logits / 0.8, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             prompt = torch.cat([prompt, next_token], dim=1)
-    
-    generated = prompt[0].tolist()
+
+    generated: list[int] = prompt[0].tolist()  # type: ignore
     print(f"Generated tokens: {generated}")
-    
+
     # Check if model produces valid outputs
-    print(f"\nAll generated tokens in vocab range: {all(0 <= t < vocab_size for t in generated)}")
+    valid_tokens: list[bool] = [0 <= t < vocab_size for t in generated]  # type: ignore
+    print(f"\nAll generated tokens in vocab range: {all(valid_tokens)}")
     
     # Final verdict
     print("\n" + "="*80)
-    if final_loss < initial_loss and all(0 <= t < vocab_size for t in generated):
+    all_valid = all(0 <= t < vocab_size for t in generated)  # type: ignore
+    if final_loss < initial_loss and all_valid:
         print("✅ VERIFICATION PASSED")
         print("   - Loss decreased during training")
         print("   - Model generates valid tokens")
@@ -188,10 +192,10 @@ def verify_model_training():
         print("❌ VERIFICATION FAILED")
         if final_loss >= initial_loss:
             print("   - Loss did not decrease")
-        if not all(0 <= t < vocab_size for t in generated):
+        if not all_valid:
             print("   - Generated invalid tokens")
     print("="*80)
-    
+
     return final_loss < initial_loss
 
 
